@@ -13,6 +13,12 @@ static void usage(void) {
         "  ralt check <file.tp> [--json]                   typecheck with diagnostics\n"
         "  ralt emit  --c file.tp -o out.c                 stop after C codegen\n"
         "  ralt explain <code>                             e.g. E0202\n"
+        "  ralt init                                       create ./ralt.yaml\n"
+        "  ralt install <name|url|dir>                     resolve/install a dep\n"
+        "  ralt deps                                       list collected dep files\n"
+        "  ralt fmt <file.tp>                              print canonical form\n"
+        "  ralt doc <file.tp> [--json]                     fn signatures\n"
+        "  ralt lsp                                        editor/agent server\n"
         "\n"
         "  -O fast   enable opt-level code paths in the C pipeline\n"
         "  -fast     integer overflow wraps instead of trapping (no-UB stays)\n",
@@ -48,7 +54,7 @@ static void mkdir_p(const char *dir) {
     mkdir(tmp, 0755);
 }
 
-/* pipeline shared by build/check: parse + typecheck */
+/* pipeline shared by build/check: parse + typecheck, one file */
 static Decl **analyze(Arena *a, const char *path, int *ndecls) {
     size_t len;
     char *src = read_all(path, &len);
@@ -61,9 +67,67 @@ static Decl **analyze(Arena *a, const char *path, int *ndecls) {
     Decl **decls = parse_file(a, toks, ntoks, path);
     int n = 0;
     while (decls && decls[n]) n++;
-    *ndecls = n;
     if (g_nerrors == 0) typecheck_file(a, decls, n);
+    *ndecls = n;
     return decls;
+}
+
+/* analyze + dependency merge: ralt.yaml deps fold into the same translation
+ * unit (v0: typed together, externs shared). Dep order: collect() sort. */
+static Decl **analyze_proj(Arena *a, const char *path, int *ndecls) {
+    char **deps = NULL;
+    int ndeps = 0;
+    bool have_deps = deps_manifest_exists() && deps_collect(&deps, &ndeps) == 0;
+    if (!have_deps || ndeps == 0) {
+        if (deps) deps_free(&deps, ndeps);
+        return analyze(a, path, ndecls);
+    }
+
+    int nall = 0;
+    Decl ***parts = (Decl ***)malloc(((size_t)ndeps + 1) * sizeof(*parts));
+    int *counts = (int *)calloc((size_t)ndeps + 1, sizeof(int));
+    if (!parts || !counts) exit(1);
+
+    for (int i = 0; i < ndeps; i++) {
+        size_t len;
+        char *src = read_all(deps[i], &len);
+        if (!src) {
+            fprintf(stderr, "ralt: cannot read dependency %s\n", deps[i]);
+            exit(2);
+        }
+        int ntoks;
+        Token *toks = lex_file(a, src, len, deps[i], &ntoks);
+        parts[i] = parse_file(a, toks, ntoks, deps[i]);
+        int n = 0;
+        while (parts[i] && parts[i][n]) n++;
+        counts[i] = n;
+        nall += n;
+    }
+    size_t len;
+    char *src = read_all(path, &len);
+    if (!src) {
+        fprintf(stderr, "ralt: cannot read %s\n", path);
+        exit(2);
+    }
+    int ntoks;
+    Token *toks = lex_file(a, src, len, path, &ntoks);
+    parts[ndeps] = parse_file(a, toks, ntoks, path);
+    int nmain = 0;
+    while (parts[ndeps] && parts[ndeps][nmain]) nmain++;
+    counts[ndeps] = nmain;
+    nall += nmain;
+
+    Decl **merged = (Decl **)calloc(((size_t)nall + 1), sizeof *merged);
+    int k = 0;
+    for (int i = ndeps; i >= 0; i--) {   /* main last: own names win prepass warns */
+        for (int j = 0; j < counts[i]; j++) merged[k++] = parts[i][j];
+    }
+    if (g_nerrors == 0) typecheck_file(a, merged, nall);
+    *ndecls = nall;
+    deps_free(&deps, ndeps);
+    free(parts);
+    free(counts);
+    return merged;
 }
 
 int main(int argc, char **argv) {
@@ -83,6 +147,37 @@ int main(int argc, char **argv) {
                e->sev == SEV_ERROR ? "error" : e->sev == SEV_WARN ? "warn" : "note",
                e->name, e->hint);
         return strcmp(e->name, "internal") == 0 && code != 0 ? 1 : 0;
+    }
+
+    /* server mode needs no file argument */
+    if (strcmp(cmd, "lsp") == 0) {
+        lsp_serve();
+        return 0;
+    }
+
+    /* manifest commands: files not required */
+    if (strcmp(cmd, "init") == 0) {
+        int rc = deps_init_template();
+        if (rc == 2) { fprintf(stderr, "ralt: ralt.yaml already exists here\n"); return 2; }
+        if (rc != 0) { fprintf(stderr, "ralt: cannot write ralt.yaml\n"); return 1; }
+        fputs("-> created ralt.yaml (add deps under the deps: key)\n", stdout);
+        return 0;
+    }
+    if (strcmp(cmd, "install") == 0) {
+        if (argc < 3) { fprintf(stderr, "ralt install: pass a dep name from ralt.yaml, a git URL, or a directory\n"); return 2; }
+        if (!deps_manifest_exists() && argc < 4) {
+            /* no manifest: direct URL/dir installs still land the cache */
+        }
+        int rc = deps_install(argc > 2 ? argv[2] : NULL);
+        return rc == 0 ? 0 : 1;
+    }
+    if (strcmp(cmd, "deps") == 0) {
+        char **paths; int n = 0;
+        if (!deps_manifest_exists()) { fputs("ralt: no ralt.yaml here\n", stderr); return 2; }
+        if (deps_collect(&paths, &n) != 0) return 1;
+        for (int i = 0; i < n; i++) printf("%s\n", paths[i]);
+        deps_free(&paths, n);
+        return 0;
     }
 
     const char *file = NULL;
@@ -122,15 +217,50 @@ int main(int argc, char **argv) {
 
     if (strcmp(cmd, "check") == 0) {
         int ndecls;
-        Decl **decls = analyze(a, file, &ndecls);
+        Decl **decls = analyze_proj(a, file, &ndecls);
         (void)decls; (void)ndecls;
         print_diags(json);
         return g_nerrors > 0 ? 1 : 0;
     }
 
-    if (strcmp(cmd, "build") == 0 || strcmp(cmd, "run") == 0) {
+    if (strcmp(cmd, "fmt") == 0) {
         int ndecls;
         Decl **decls = analyze(a, file, &ndecls);
+        if (g_nerrors > 0) {
+            print_diags(false);
+            fprintf(stderr, "ralt: %d error(s), cannot format\n", g_nerrors);
+            return 1;
+        }
+        bool inplace = outname != NULL && strcmp(outname, "-w") == 0;
+        if (inplace) {
+            FILE *tmp = fopen("build/ralt_fmt_tmp.tp", "w");
+            if (!tmp) { fputs("ralt: cannot write temp file\n", stderr); return 1; }
+            fmt_file(a, decls, ndecls, tmp);
+            fclose(tmp);
+            char cmd2[1100];
+            snprintf(cmd2, sizeof cmd2, "cp build/ralt_fmt_tmp.tp %s", file);
+            if (system(cmd2) != 0) return 1;
+            return 0;
+        }
+        fmt_file(a, decls, ndecls, stdout);
+        return 0;
+    }
+
+    if (strcmp(cmd, "doc") == 0) {
+        int ndecls;
+        Decl **decls = analyze(a, file, &ndecls);
+        if (g_nerrors > 0) {
+            print_diags(false);
+            fprintf(stderr, "ralt: %d error(s), cannot emit docs\n", g_nerrors);
+            return 1;
+        }
+        doc_file(a, decls, ndecls, stdout, json);
+        return 0;
+    }
+
+    if (strcmp(cmd, "build") == 0 || strcmp(cmd, "run") == 0) {
+        int ndecls;
+        Decl **decls = analyze_proj(a, file, &ndecls);
         if (g_nerrors > 0) {
             print_diags(false);
             fprintf(stderr, "ralt: %d error(s), build failed\n", g_nerrors);

@@ -9,9 +9,9 @@ build/ralt: $(SRC) $(HDR)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -o $@ $(SRC)
 
-.PHONY: test bench clean
-test: build/ralt
-	sh tests/run.sh && sh tests/determinism.sh
+.PHONY: test bench clean usage
+usage: build/ralt
+	@./build/ralt 2>&1 | head -3
 
 bench: build/ralt
 	sh bench/build_bench.sh

@@ -61,6 +61,13 @@ void print_diags(bool json);
 bool is_c_reserved(const char *s);                   /* codegen.c */
 void diag_expected(Span sp, const char *what, const char *got); /* util.c */
 
+/* deps.c - ralt.yaml manifest + dependency collection */
+int  deps_manifest_exists(void);
+int  deps_init_template(void);
+int  deps_install(const char *target);
+int  deps_collect(char ***paths, int *count);
+void deps_free(char ***paths, int count);
+
 /* codes - keep in sync with spec/errors.csv; never renumber */
 #define E0001 1
 #define E0002 2
@@ -245,5 +252,9 @@ Token *lex_file(Arena *a, const char *src, size_t len, const char *file, int *nt
 Decl **parse_file(Arena *a, Token *toks, int ntoks, const char *file);
 void typecheck_file(Arena *a, Decl **decls, int ndecls);
 void codegen_file(Arena *a, Decl **decls, int ndecls, const char *outpath, bool fast);
+
+void fmt_file(Arena *a, Decl **decls, int ndecls, FILE *out);            /* fmt.c */
+void doc_file(Arena *a, Decl **decls, int ndecls, FILE *out, bool json); /* doc.c */
+void lsp_serve(void);                                                    /* lsp.c */
 
 #endif

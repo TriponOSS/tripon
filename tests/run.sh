@@ -87,6 +87,52 @@ for src in tests/cases/*.tp; do
     fi
 done
 
+# --- P2 tooling subcontracts ---
+# fmt: canonical + idempotent (formatting formatted output is a no-op)
+fmt_src=tests/cases/calls.tp
+[ -f "$fmt_src" ] || fmt_src=tests/cases/hello.tp
+$RALT fmt "$fmt_src" > "$OUT/fmt1.tp" 2>>"$OUT/fmt.log"
+$RALT fmt "$OUT/fmt1.tp" > "$OUT/fmt2.tp" 2>>"$OUT/fmt.log"
+if diff -u "$OUT/fmt1.tp" "$OUT/fmt2.tp" > "$OUT/fmt.diff" 2>&1; then
+    note "ok   tool/fmt (canonical + idempotent)"
+    pass=$((pass + 1))
+else
+    note "FAIL tool/fmt: not idempotent"
+    head -30 "$OUT/fmt.diff"
+    fail=$((fail + 1)); failed_names="$failed_names tool/fmt"
+fi
+
+# doc: text and json modes
+if $RALT doc "$fmt_src" > /dev/null 2>"$OUT/doc.log" && \
+   $RALT doc --json "$fmt_src" 2>>$OUT/doc.log | grep -q '"signature"'; then
+    note "ok   tool/doc (text + json)"
+    pass=$((pass + 1))
+else
+    note "FAIL tool/doc"
+    cat "$OUT/doc.log"
+    fail=$((fail + 1)); failed_names="$failed_names tool/doc"
+fi
+
+# lsp: editor/agent protocol smoke
+if sh tests/lsp_smoke.sh > "$OUT/lsp.log" 2>&1; then
+    note "ok   tool/lsp (protocol)"
+    pass=$((pass + 1))
+else
+    note "FAIL tool/lsp"
+    cat "$OUT/lsp.log"
+    fail=$((fail + 1)); failed_names="$failed_names tool/lsp"
+fi
+
+# deps: manifest + collect + build with a local dep
+if sh tests/deps_smoke.sh > "$OUT/deps.log" 2>&1; then
+    note "ok   tool/deps (manifest + collect)"
+    pass=$((pass + 1))
+else
+    note "FAIL tool/deps"
+    cat "$OUT/deps.log"
+    fail=$((fail + 1)); failed_names="$failed_names tool/deps"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ -n "$failed_names" ] && printf 'failed:%s\n' "$failed_names"
 [ "$fail" -eq 0 ]

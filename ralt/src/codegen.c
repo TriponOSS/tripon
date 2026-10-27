@@ -432,6 +432,21 @@ static void emit_stmt(Cg *g, Stmt *s) {
 
 /* ---------------- functions ---------------- */
 
+static void emit_fn_proto(Cg *g, FnDecl *fn) {
+    bool is_main = strcmp(fn->name, "main") == 0;
+    if (is_main) {
+        fputs("int main(void);\n", g->out);
+        return;
+    }
+    fprintf(g->out, "static %s %s(", ty_cname(fn->ret), cg_fnname(g, fn));
+    if (fn->nparams == 0) fputs("void", g->out);
+    for (int i = 0; i < fn->nparams; i++) {
+        if (i) fputs(", ", g->out);
+        fprintf(g->out, "%s %s", ty_cname(fn->params[i].ty), cg_ident(g, fn->params[i].name));
+    }
+    fputs(");\n", g->out);
+}
+
 static void emit_fn(Cg *g, FnDecl *fn) {
     if (fn->is_extern) {
         fprintf(g->out, "extern %s %s(", ty_cname(fn->ret), fn->name);
@@ -488,6 +503,10 @@ void codegen_file(Arena *a, Decl **decls, int ndecls, const char *outpath, bool 
     fputs("\n/* ---- extern blocks ---- */\n", out);
     for (int i = 0; i < ndecls; i++)
         if (decls[i]->kind == D_FN && decls[i]->fn->is_extern) emit_fn(&g, decls[i]->fn);
+    /* forward declarations: Tripon allows forward/mutual refs, deps merge freely */
+    fputs("\n/* ---- forward decls ---- */\n", out);
+    for (int i = 0; i < ndecls; i++)
+        if (decls[i]->kind == D_FN && !decls[i]->fn->is_extern) emit_fn_proto(&g, decls[i]->fn);
     fputs("\n/* ---- tripon fns (main maps to C main) ---- */\n", out);
     for (int i = 0; i < ndecls; i++)
         if (decls[i]->kind == D_FN && !decls[i]->fn->is_extern) emit_fn(&g, decls[i]->fn);
