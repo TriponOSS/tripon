@@ -264,6 +264,20 @@ static void cg_trap_args(Cg *g, Span sp) {
     fprintf(g->out, ", \"%s\", %d", g->file, sp.line);
 }
 
+/* parenthesize where C precedence would regroup a parenthesized Tripon
+ * subexpression (a || b && c is info-loss for `a || (b && c)` groups):
+ * parent 0 = ||, 1 = &&, 2 = relational */
+static void emit_log_operand(Cg *g, Expr *sub, int parent) {
+    int need = 0;
+    if (sub->kind == EX_BIN && sub->lhs) {
+        if (parent == 0) need = sub->op != TK_OR;
+        else if (parent == 1) need = sub->op == TK_OR;
+        else need = sub->op == TK_OR || sub->op == TK_AND;
+    }
+    if (need) { fputc('(', g->out); emit_expr(g, sub); fputc(')', g->out); }
+    else emit_expr(g, sub);
+}
+
 static void emit_bin(Cg *g, Expr *e) {
     Ty t = e->lhs->ty == TY_UNSET ? e->rhs->ty : e->lhs->ty;
     bool is_int = ty_is_int(t);
@@ -280,25 +294,29 @@ static void emit_bin(Cg *g, Expr *e) {
             emit_expr(g, e->rhs);
             fputs(e->op == TK_EQ ? ")" : "))", g->out);
         } else {
-            emit_expr(g, e->lhs);
+            emit_log_operand(g, e->lhs, 2);
             fputs(e->op == TK_EQ ? " == " : " != ", g->out);
-            emit_expr(g, e->rhs);
+            emit_log_operand(g, e->rhs, 2);
         }
         break;
     }
     case TK_AND:
-        emit_expr(g, e->lhs); fputs(" && ", g->out); emit_expr(g, e->rhs);
+        emit_log_operand(g, e->lhs, 1);
+        fputs(" && ", g->out);
+        emit_log_operand(g, e->rhs, 1);
         break;
     case TK_OR:
-        emit_expr(g, e->lhs); fputs(" || ", g->out); emit_expr(g, e->rhs);
+        emit_log_operand(g, e->lhs, 0);
+        fputs(" || ", g->out);
+        emit_log_operand(g, e->rhs, 0);
         break;
     case TK_LT: case TK_GT: case TK_LE: case TK_GE: {
-        emit_expr(g, e->lhs);
+        emit_log_operand(g, e->lhs, 2);
         if (e->op == TK_LT) fputs(" < ", g->out);
         else if (e->op == TK_GT) fputs(" > ", g->out);
         else if (e->op == TK_LE) fputs(" <= ", g->out);
         else fputs(" >= ", g->out);
-        emit_expr(g, e->rhs);
+        emit_log_operand(g, e->rhs, 2);
         break;
     }
     case TK_PLUS: case TK_MINUS: case TK_STAR: case TK_SLASH: case TK_PERCENT: {
@@ -715,18 +733,10 @@ static void emit_stmt(Cg *g, Stmt *s) {
         fputs(") {\n", g->out);
         for (int i = 0; i < s->nbody; i++) emit_stmt(g, s->body[i]);
         if (s->els) {
+            /* recurse: else-if chains may nest arbitrarily (ST_BLOCK prints
+             * its own braces, ST_IF continues the chain) */
             fputs("} else ", g->out);
-            if (s->els->kind == ST_IF) {
-                fputs("if (", g->out);
-                emit_expr(g, s->els->cond);
-                fputs(") {\n", g->out);
-                for (int i = 0; i < s->els->nbody; i++) emit_stmt(g, s->els->body[i]);
-                fputs("}\n", g->out);
-            } else {
-                fputs("{\n", g->out);
-                for (int i = 0; i < s->els->nbody; i++) emit_stmt(g, s->els->body[i]);
-                fputs("}\n", g->out);
-            }
+            emit_stmt(g, s->els);
         } else {
             fputs("}\n", g->out);
         }

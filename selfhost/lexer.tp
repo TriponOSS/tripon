@@ -36,6 +36,18 @@ fn is_hex(c: i32) -> bool {
     return is_digit(c) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
 }
 
+// raw stdout write, byte for byte, no trailing newline (tokens oracle
+// formats its own line breaks)
+fn put_raw(s: str) -> () {
+    let n = len(s);
+    let i = 0;
+    while i < n {
+        putchar(cast<i32>(s[i]));
+        i = i + 1;
+    }
+    return;
+}
+
 // ---------------- output helpers ----------------
 
 // non-negative decimal, recursive
@@ -50,23 +62,23 @@ fn put_i32(v: i32) -> () {
 // oracle escaping: \n \t \r \\ \" two chars, otherwise \xNN lowercase hex
 fn put_escaped(b: i32) -> () {
     if b == 10 {
-        print_str("\\n");
+        put_raw("\\n");
         return;
     }
     if b == 9 {
-        print_str("\\t");
+        put_raw("\\t");
         return;
     }
     if b == 13 {
-        print_str("\\r");
+        put_raw("\\r");
         return;
     }
     if b == 92 {
-        print_str("\\\\");
+        put_raw("\\\\");
         return;
     }
     if b == 34 {
-        print_str("\\\"");
+        put_raw("\\\"");
         return;
     }
     if b >= 32 && b < 127 {
@@ -75,7 +87,7 @@ fn put_escaped(b: i32) -> () {
     }
     let h = b / 16;
     let l = b % 16;
-    print_str("\\x");
+    put_raw("\\x");
     if h < 10 {
         putchar(48 + h);
     } else {
@@ -91,7 +103,7 @@ fn put_escaped(b: i32) -> () {
 
 // bare line: "KIND line col\n" (no trailing space, byte-identical to oracle)
 fn emit_bare(k: str, sl: i32, sc: i32) -> () {
-    print_str(k);
+    put_raw(k);
     putchar(32);
     put_i32(sl);
     putchar(32);
@@ -140,25 +152,25 @@ fn kw_kind(src: str, st: i32, m: i32, n: i32) -> i32 {
 }
 
 fn put_kw_name(k: i32) -> () {
-    if k == 1 { print_str("TK_FN"); return; }
-    if k == 2 { print_str("TK_LET"); return; }
-    if k == 3 { print_str("TK_CONST"); return; }
-    if k == 4 { print_str("TK_RETURN"); return; }
-    if k == 5 { print_str("TK_IF"); return; }
-    if k == 6 { print_str("TK_ELSE"); return; }
-    if k == 7 { print_str("TK_WHILE"); return; }
-    if k == 8 { print_str("TK_MATCH"); return; }
-    if k == 9 { print_str("TK_STRUCT"); return; }
-    if k == 10 { print_str("TK_ENUM"); return; }
-    if k == 11 { print_str("TK_USE"); return; }
-    if k == 12 { print_str("TK_TIER"); return; }
-    if k == 13 { print_str("TK_EXTERN"); return; }
-    if k == 14 { print_str("TK_TRUE"); return; }
-    if k == 15 { print_str("TK_FALSE"); return; }
-    if k == 16 { print_str("TK_MUT"); return; }
-    if k == 17 { print_str("TK_PUB"); return; }
-    if k == 18 { print_str("TK_CAST"); return; }
-    print_str("TK_IDENT");
+    if k == 1 { put_raw("TK_FN"); return; }
+    if k == 2 { put_raw("TK_LET"); return; }
+    if k == 3 { put_raw("TK_CONST"); return; }
+    if k == 4 { put_raw("TK_RETURN"); return; }
+    if k == 5 { put_raw("TK_IF"); return; }
+    if k == 6 { put_raw("TK_ELSE"); return; }
+    if k == 7 { put_raw("TK_WHILE"); return; }
+    if k == 8 { put_raw("TK_MATCH"); return; }
+    if k == 9 { put_raw("TK_STRUCT"); return; }
+    if k == 10 { put_raw("TK_ENUM"); return; }
+    if k == 11 { put_raw("TK_USE"); return; }
+    if k == 12 { put_raw("TK_TIER"); return; }
+    if k == 13 { put_raw("TK_EXTERN"); return; }
+    if k == 14 { put_raw("TK_TRUE"); return; }
+    if k == 15 { put_raw("TK_FALSE"); return; }
+    if k == 16 { put_raw("TK_MUT"); return; }
+    if k == 17 { put_raw("TK_PUB"); return; }
+    if k == 18 { put_raw("TK_CAST"); return; }
+    put_raw("TK_IDENT");
     return;
 }
 
@@ -297,7 +309,7 @@ fn main() -> i32 {
                     put_i32(sc);
                     putchar(10);
                 } else {
-                    print_str("TK_IDENT");
+                    put_raw("TK_IDENT");
                     putchar(32);
                     put_i32(sl);
                     putchar(32);
@@ -435,7 +447,7 @@ fn main() -> i32 {
                         }
                     }
                 }
-                print_str("TK_STR");
+                put_raw("TK_STR");
                 putchar(32);
                 put_i32(sl);
                 putchar(32);

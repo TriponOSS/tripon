@@ -13,6 +13,9 @@ build/ralt: $(SRC) $(HDR)
 usage: build/ralt
 	@./build/ralt 2>&1 | head -3
 
+test: build/ralt
+	sh tests/run.sh
+
 bench: build/ralt
 	sh bench/build_bench.sh
 

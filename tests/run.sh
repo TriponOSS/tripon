@@ -133,6 +133,16 @@ else
     fail=$((fail + 1)); failed_names="$failed_names tool/deps"
 fi
 
+# selfhost: Tripon lexer port must replay the bootstrap C lexer token-for-token
+if sh tests/selfhost.sh > "$OUT/selfhost.log" 2>&1; then
+    note "ok   selfhost (P3.0 lexer oracle)"
+    pass=$((pass + 1))
+else
+    note "FAIL selfhost"
+    cat "$OUT/selfhost.log"
+    fail=$((fail + 1)); failed_names="$failed_names selfhost"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ -n "$failed_names" ] && printf 'failed:%s\n' "$failed_names"
 [ "$fail" -eq 0 ]
