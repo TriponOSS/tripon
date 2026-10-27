@@ -1,0 +1,7 @@
+use tier core;
+
+fn main() -> i32 {
+    let f = 9.0e18;
+    let n = cast<i32>(f);
+    return n;
+}

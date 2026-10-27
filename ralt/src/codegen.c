@@ -133,6 +133,9 @@ static void emit_prologue(Cg *g) {
     fputs("static int16_t tp_nar16_g(int32_t v, const char *s, int l) { if (v < INT16_MIN  || v > INT16_MAX)  tp_fail(s, l, 9001, \"integer-overflow-trap\"); return (int16_t)v; }\n", g->out);
     fputs("static uint8_t  tp_naru8_g(int32_t v, const char *s, int l)  { if (v < 0 || v > UINT8_MAX)  tp_fail(s, l, 9001, \"integer-overflow-trap\"); return (uint8_t)v; }\n", g->out);
     fputs("static uint16_t tp_naru16_g(int32_t v, const char *s, int l) { if (v < 0 || v > UINT16_MAX) tp_fail(s, l, 9001, \"integer-overflow-trap\"); return (uint16_t)v; }\n", g->out);
+    /* cast-path guards: float->int is the C-UB hole; range-check then trunc (E9004) */
+    fputs("static int64_t tp_f2i_g(double v, double lo, double hiex, const char *s, int l) { if (!(v >= lo && v < hiex)) tp_fail(s, l, 9004, \"cast-overflow-trap\"); return (int64_t)v; }\n", g->out);
+    fputs("static uint64_t tp_f2u_g(double v, double hiex, const char *s, int l) { if (!(v >= 0.0 && v < hiex)) tp_fail(s, l, 9004, \"cast-overflow-trap\"); return (uint64_t)v; }\n", g->out);
 
     fputs("static void tp_builtin_print_i32(int32_t x) { printf(\"%d\\n\", x); }\n", g->out);
     fputs("static void tp_builtin_print_i64(int64_t x) { printf(\"%lld\\n\", (long long)x); }\n", g->out);
@@ -342,30 +345,65 @@ static bool is_builtin(const char *name) {
     return false;
 }
 
-/* int target casts: int->int (narrowing through the tp_nar guard helpers, same
- * recheck path as narrow arith so -fast semantics stay defined), float->int
- * truncates toward zero through the same helpers. */
+/* int target casts: fully defined. int->int narrowing rechecks the FULL
+ * source range (no pre-trunc, so wraps can't sneak past the guard); float->int
+ * truncates toward zero after an exact range guard (E9004), never raw-C-UB. */
 static void emit_cast_to_int(Cg *g, Expr *e, Ty tt) {
-    switch (tt) {
-    case TY_I8:
-    case TY_I16:
-    case TY_U8:
-    case TY_U16: {
-        const char *h = tt == TY_I8 ? "tp_nar8_g" : tt == TY_I16 ? "tp_nar16_g"
-                      : tt == TY_U8 ? "tp_naru8_g" : "tp_naru16_g";
-        fprintf(g->out, "%s((int32_t)(", h);
-        emit_expr(g, e->operand);
-        fputs(")", g->out);
+    Ty st = e->operand->ty;
+    bool src_f = ty_is_float(st);
+    bool src_u64 = st == TY_U64 || st == TY_USIZE;
+    bool src_i64 = st == TY_I64 || st == TY_ISIZE;
+
+    /* float sources: one guarded f2 helper checked against the FINAL target
+     * bounds (lo exact, hiex = exact power-of-two exclusive above) */
+    if (src_f) {
+        double lo = 0.0, hiex = 0.0;
+        bool uns = tt == TY_U8 || tt == TY_U16 || tt == TY_U32 || tt == TY_U64 || tt == TY_USIZE;
+        if (!uns) {
+            switch (tt) {
+            case TY_I8:  lo = -128.0; hiex = 128.0; break;
+            case TY_I16: lo = -32768.0; hiex = 32768.0; break;
+            case TY_I32: lo = -2147483648.0; hiex = 2147483648.0; break;
+            default:     lo = -9223372036854775808.0; hiex = 9223372036854775808.0; break;
+            }
+            fprintf(g->out, "tp_f2i_g((double)(");
+            emit_expr(g, e->operand);
+            fprintf(g->out, "), %.17g, %.17g", lo, hiex);
+        } else {
+            switch (tt) {
+            case TY_U8:  hiex = 256.0; break;
+            case TY_U16: hiex = 65536.0; break;
+            case TY_U32: hiex = 4294967296.0; break;
+            default:     hiex = 18446744073709551616.0; break;
+            }
+            fprintf(g->out, "tp_f2u_g((double)(");
+            emit_expr(g, e->operand);
+            fprintf(g->out, "), %.17g", hiex);
+        }
         cg_trap_args(g, e->span);
         fputc(')', g->out);
         return;
     }
+
+    /* int sources: explicit lossy casts are the user's call - defined
+     * modulo-truncation in C99, no trap (spec T2). The guard twins exist for
+     * the implicit-narrow-arithmetic path instead. */
+    switch (tt) {
     case TY_I32: fputs("(int32_t)", g->out); break;
-    case TY_I64: fputs("(int64_t)", g->out); break;
     case TY_U32: fputs("(uint32_t)", g->out); break;
-    case TY_U64: fputs("(uint64_t)", g->out); break;
-    case TY_ISIZE: fputs("(intptr_t)", g->out); break;
-    case TY_USIZE: fputs("(uintptr_t)", g->out); break;
+    case TY_I8: case TY_I16: case TY_U8: case TY_U16: {
+        /* intermediate 32-bit hop keeps one modulo definition for every width */
+        const char *h = tt == TY_I8 ? "int8_t" : tt == TY_I16 ? "int16_t"
+                      : tt == TY_U8 ? "uint8_t" : "uint16_t";
+        fprintf(g->out, "(%s)(int32_t)(", h);
+        emit_expr(g, e->operand);
+        fputs(")", g->out);
+        return;
+    }
+    case TY_I64: fputs(src_i64 ? "" : "(int64_t)", g->out); break;
+    case TY_U64: fputs(src_u64 ? "" : "(uint64_t)", g->out); break;
+    case TY_ISIZE: fputs(src_i64 ? "" : "(intptr_t)", g->out); break;
+    case TY_USIZE: fputs(src_u64 ? "" : "(uintptr_t)", g->out); break;
     default: break;
     }
     emit_expr(g, e->operand);

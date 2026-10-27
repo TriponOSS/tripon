@@ -1,0 +1,7 @@
+use tier core;
+
+fn main() -> i32 {
+    let f = 1.0e20;
+    let h = cast<u64>(f);
+    return cast<i32>(h);
+}
