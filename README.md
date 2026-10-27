@@ -3,7 +3,7 @@
 ![ci](https://github.com/TriponOSS/tripon/actions/workflows/ci.yml/badge.svg)
 ![license MIT](https://img.shields.io/badge/license-MIT-green)
 ![spec v0](https://img.shields.io/badge/spec-v0.0-blue)
-![phase](https://img.shields.io/badge/phase-P2%20shipped-orange)
+![phase](https://img.shields.io/badge/phase-P3%20in%20progress-orange)
 ![backend](https://img.shields.io/badge/codegen-C99-informational)
 
 **A robust compiled language for low-resource systems — and the most
@@ -72,7 +72,7 @@ Requirements: git, any C99 toolchain (gcc/clang, otherwise nothing). Browse:
 git clone https://github.com/TriponOSS/tripon
 cd tripon
 make                    # makes build/ralt — one static binary, zero deps
-make test               # 18 tests, GCC- and clang-green
+make test               # 42 checks, gcc- and clang-green (incl. self-host oracle)
 ```
 
 Run programs:
@@ -122,6 +122,43 @@ fn main() -> i32 {
 Signatures are explicit, locals infer, everything is checked before your code
 reaches runtime. There is no `var` and there is no dynamic anything: what is
 declared is what runs.
+
+### Structs, enums, match, cast
+
+Data lives by value, variants carry payloads, `match` is exhaustive — the
+compiler refuses to ship a missing arm (E0206):
+
+```tripon
+struct Point { x: i32; y: i32; }
+
+enum Res { Good(i32), Bad(str), Empty }
+
+fn show(r: Res) -> i32 {
+    match r {
+        Res::Good(v) => { print_i32(v); }
+        Res::Bad(b)  => { print_str(b); }
+        Res::Empty   => { }
+    }
+    return 0;
+}
+
+fn scale(p: Point) -> Point {
+    return Point { x: p.x * 2, y: p.y * 2 };
+}
+```
+
+Lossy conversions are explicit and boring: `cast<i16>(x)` truncates by
+definition (T2), never disappoints silently.
+
+Fixed-size arrays are bounds-checked by construction (E9002), `len(arr)`
+compile-time, element math `+=` works, whole-array assignment copies:
+
+```tripon
+let a: [5]i32;
+a[0] = 10;
+a[i] += i;
+print_i32(len(a));      // 5, known without running
+```
 
 ### No null, no undefined
 
@@ -219,6 +256,7 @@ Compilers are personal only to theirs humans; Tripon's is not.
 | `ralt deps` | list collected dep sources |
 | `ralt fmt <file.tp>` | canonical layout — agents can show diffs instead of guessing |
 | `ralt doc <file.tp> [--json]` | signatures of every `fn` (text or JSON) |
+| `ralt tokens <file.tp>` | frozen token-stream oracle — pins the self-host lexer byte-for-byte |
 | `ralt lsp` | editor/agent server over stdio |
 
 Typical agent loop (real demo):
@@ -263,10 +301,10 @@ reproduces on any box):
 
 | pipeline | time |
 |---|---|
-| full build (emit + cc + link) | ~330 ms |
-| `ralt check` (type gates only) | ~18 ms |
-| codegen only (emit .c) | ~9 ms |
-| hello binary (x86-64, dynamic) | ~17 KB |
+| full build (emit + cc + link) | ~333 ms |
+| `ralt check` (type gates only) | ~4 ms |
+| codegen only (emit .c) | ~5 ms |
+| hello binary (x86-64, dynamic) | ~17.7 KB |
 
 Startup ≈ instant (static C body), no optimizer by default: `-O fast` opts
 into passes (niche packing for `result<T, E>` = zero overhead) once types
@@ -298,10 +336,15 @@ What actually makes Tripon the #1 agent-facing language:
 - [x] **P0 — Spec.** grammar EBNF, language contract, frozen error table
 - [x] **P1.0 — Bootstrap compiler in C99.** lex/parse/typecheck/C99 codegen,
       drivers, no-UB traps, builtins
-- [x] **P2 — Agent tooling.** fmt/doc/lsp/deps; suite 18, determinism-green
-- [ ] **P3 — Self-host.** lexer/parser/checker ported to Tripon — "Tripon made
-      with Tripon" — bootstrap fails closed until the ported compiler passes
-      its own compilation and the full suite on the golden cases
+- [x] **P1.1 — Data + control.** structs, enums with payloads, exhaustive
+      `match`, `cast<T>`, `opt`/`result`/`?`/no-null, fixed arrays + str
+      indexing (E9002/E9004), `*i8` extern-island pointers
+- [x] **P2 — Agent tooling.** fmt/doc/lsp/deps; `ralt tokens` oracle; suite
+      42 checks, determinism-green
+- [~] **P3 — Self-host.** P3.0 lexer port done: `selfhost/lexer.tp` replays
+      the bootstrap lexer's token stream across 47 files (frozen oracle test).
+      Next: parser (fmt-verified), then checker — until "Tripon made with
+      Tripon" compiles itself and passes the suite
 - [ ] **P4 — Native x86-64 backend.** drop the C dependence; linear-scan
       register allocation, no SSA issuance overhead
 - [ ] Ideation: package cache with content addressing, tier linter
@@ -315,9 +358,10 @@ Phase detail lives in [PLAN.md](PLAN.md).
 ```
 spec/        grammar.ebnf  tripon.md  errors.csv   ← the language contract (frozen)
 ralt/src/    the bootstrap compiler: 1 new C file per pass, zero deps
+selfhost/    Tripon-in-Tripon: self-host compiler sources (P3, lexer port done)
 stdlib/      tier-managed standard library (grows with P1.2)
-examples/    runnable .tp programs (hello, fib, ...)
-tests/       frozen contract: cases + goldens + determinism + deps smoke
+examples/    runnable .tp programs (hello, fib, report, ...)
+tests/       frozen contract: cases + goldens + determinism + deps + selfhost oracle
 bench/       builder benchmarks → README numbers
 ```
 
