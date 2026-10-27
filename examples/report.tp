@@ -12,8 +12,9 @@ fn main() -> i32 {
     report("shipped: fixed arrays, str index, E9002 (P1.2)");
     report("shipped: *i8 raw pointers for extern islands (T7 fence)");
     report("shipped: ralt tokens oracle - frozen for the selfhost port");
-    report("suite: 41 checks passing, gcc + clang, deterministic");
-    report("in flight: selfhost P3.0 - bootstrapped lexer in Tripon");
-    report("next: lexer port diff-clean vs oracle, then selfhost.sh");
+    report("suite: 42 checks passing, gcc + clang, deterministic");
+    report("shipped: P3.0 selfhost lexer - matches bootstrap 47/47");
+    report("fixed: codegen else-if chains + || && paren regroup");
+    report("next: P3.1 selfhost parser port");
     return 0;
 }
