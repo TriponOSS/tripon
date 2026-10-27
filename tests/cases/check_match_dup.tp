@@ -1,0 +1,11 @@
+use tier core;
+
+fn main() -> i32 {
+    let n = 1;
+    match n {
+        0 => { }
+        0 => { }
+        _ => { }
+    }
+    return 0;
+}

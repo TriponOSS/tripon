@@ -1,0 +1,3 @@
+[
+  { "code": "E0206", "kind": "error", "name": "non-exhaustive-match", "file": "tests/cases/check_match_missing.tp", "line": 7, "col": 5, "len": 5, "msg": "match over 'Color' misses variant 'Blue'", "hint": "cover every variant or add a deliberate '_' arm" }
+]

@@ -44,7 +44,11 @@ static void fm_indent(Fm *f) {
     for (int i = 0; i < f->indent * 2; i++) fputc(' ', f->out);
 }
 
-static void fm_type(Fm *f, Ty t) { fputs(ty_name(t), f->out); }
+/* composite type name: struct/enum types print their own name */
+static void fm_tyname(Fm *f, Ty t, const char *tname) {
+    if ((t == TY_STRUCT || t == TY_ENUM || t == TY_TYPEDEF) && tname) fputs(tname, f->out);
+    else fputs(ty_name(t), f->out);
+}
 
 static void fm_expr(Fm *f, Expr *e, int parent_prec) {
     switch (e->kind) {
@@ -76,6 +80,44 @@ static void fm_expr(Fm *f, Expr *e, int parent_prec) {
         break;
     case EX_IDENT:
         fputs(e->sval, f->out);
+        break;
+    case EX_FIELD:
+        fm_expr(f, e->base, 100);
+        fputc('.', f->out);
+        fputs(e->sval, f->out);
+        break;
+    case EX_STRUCTINIT: {
+        fputs(e->sval, f->out);
+        fputs(" { ", f->out);
+        for (int i = 0; i < e->nargs; i++) {
+            if (i) fputs(", ", f->out);
+            fputs(e->inames[i], f->out);
+            fputs(": ", f->out);
+            fm_expr(f, e->args[i], 0);
+        }
+        fputs(" }", f->out);
+        break;
+    }
+    case EX_VARIANT:
+        fputs(e->sval, f->out);
+        fputs("::", f->out);
+        fputs(e->vname, f->out);
+        if (e->nargs > 0) {
+            fputc('(', f->out);
+            for (int i = 0; i < e->nargs; i++) {
+                if (i) fputs(", ", f->out);
+                fm_expr(f, e->args[i], 0);
+            }
+            fputc(')', f->out);
+        }
+        break;
+    case EX_CAST:
+        fputs("cast<", f->out);
+        fm_tyname(f, e->ty, e->sval);
+        fputc('>', f->out);
+        fputc('(', f->out);
+        fm_expr(f, e->operand, 0);
+        fputc(')', f->out);
         break;
     case EX_CALL:
         fputs(e->callee, f->out);
@@ -139,7 +181,7 @@ static void fm_stmt(Fm *f, Stmt *s) {
         fputs(s->name, f->out);
         if (s->ty != TY_UNSET) {
             fputs(": ", f->out);
-            fm_type(f, s->ty);
+            fm_tyname(f, s->ty, s->tname);
         }
         if (s->init) {
             fputs(" = ", f->out);
@@ -181,6 +223,48 @@ static void fm_stmt(Fm *f, Stmt *s) {
         fm_indent(f);
         fputs("}\n", f->out);
         break;
+    case ST_MATCH: {  /* arm pattern line; arm bodies always blocks */
+        fm_indent(f);
+        fputs("match ", f->out);
+        fm_expr(f, s->cond, 0);
+        fputs(" {\n", f->out);
+        f->indent++;
+        for (int i = 0; i < s->narms; i++) {
+            MatchArm *arm = s->arms[i];
+            fm_indent(f);
+            switch (arm->pkind) {
+            case PAT_WILD: fputs("_", f->out); break;
+            case PAT_LIT_INT: fprintf(f->out, "%lld", (long long)arm->ival); break;
+            case PAT_LIT_BOOL: fputs(arm->bval ? "true" : "false", f->out); break;
+            case PAT_VARIANT:
+                if (arm->ename) { fputs(arm->ename, f->out); fputs("::", f->out); }
+                fputs(arm->vname, f->out);
+                if (arm->nbinds > 0) {
+                    fputc('(', f->out);
+                    for (int k = 0; k < arm->nbinds; k++) {
+                        if (k) fputs(", ", f->out);
+                        fputs(arm->binds[k], f->out);
+                    }
+                    fputc(')', f->out);
+                }
+                break;
+            }
+            if (arm->nbody == 0) {
+                fputs(" => {}\n", f->out);
+            } else {
+                fputs(" => {\n", f->out);
+                f->indent++;
+                fm_stmts(f, arm->body, arm->nbody);
+                f->indent--;
+                fm_indent(f);
+                fputs("}\n", f->out);
+            }
+        }
+        f->indent--;
+        fm_indent(f);
+        fputs("}\n", f->out);
+        break;
+    }
     case ST_EXPR:
         fm_indent(f);
         fm_expr(f, s->value, 0);
@@ -213,33 +297,68 @@ void fmt_file(Arena *a, Decl **decls, int ndecls, FILE *out) {
             fprintf(out, "use tier %s;\n", d->name);
         } else if (d->kind == D_FN) {
             FnDecl *fn = d->fn;
-            if (fn->is_extern) {
+            bool fn_extern = fn->is_extern;
+            if (fn_extern) {
                 fprintf(out, "extern \"C\" {\n");
                 fprintf(out, "    fn %s(", fn->name);
                 for (int k = 0; k < fn->nparams; k++) {
                     if (k) fputs(", ", out);
-                    fprintf(out, "%s: %s", fn->params[k].name, ty_name(fn->params[k].ty));
+                    fprintf(out, "%s: ", fn->params[k].name);
+                    fm_tyname(&f, fn->params[k].ty, fn->params[k].tname);
                 }
                 fprintf(out, ")");
                 if (fn->ret != TY_VOID) {
-                    fprintf(out, " -> %s", ty_name(fn->ret));
+                    fprintf(out, " -> ");
+                    fm_tyname(&f, fn->ret, fn->retname);
                 }
                 fprintf(out, ";\n}\n");
             } else {
                 fprintf(out, "fn %s(", fn->name);
                 for (int k = 0; k < fn->nparams; k++) {
                     if (k) fputs(", ", out);
-                    fprintf(out, "%s: %s", fn->params[k].name, ty_name(fn->params[k].ty));
+                    fprintf(out, "%s: ", fn->params[k].name);
+                    fm_tyname(&f, fn->params[k].ty, fn->params[k].tname);
                 }
                 fprintf(out, ")");
                 if (fn->ret != TY_VOID) {
-                    fprintf(out, " -> %s", ty_name(fn->ret));
+                    fprintf(out, " -> ");
+                    fm_tyname(&f, fn->ret, fn->retname);
                 }
                 fputs(" {\n", out);
                 f.indent = 1;
                 fm_stmts(&f, fn->body, fn->nbody);
                 fputs("}\n", out);
             }
+        } else if (d->kind == D_STRUCT) {
+            StDecl *st = d->st;
+            fprintf(out, "struct %s {\n", st->name);
+            for (int k = 0; k < st->nfields; k++) {
+                fprintf(out, "    %s: ", st->fields[k].name);
+                fm_tyname(&f, st->fields[k].ty, st->fields[k].tname);
+                fputs(";\n", out);
+            }
+            fputs("}\n", out);
+        } else if (d->kind == D_ENUM) {
+            EnDecl *en = d->en;
+            fprintf(out, "enum %s {\n", en->name);
+            for (int k = 0; k < en->nvariants; k++) {
+                Variant *v = &en->variants[k];
+                fputs("    ", out);
+                fputs(v->name, out);
+                if (v->npayloads > 0) {
+                    fputc('(', out);
+                    for (int p = 0; p < v->npayloads; p++) {
+                        if (p) fputs(", ", out);
+                        fm_tyname(&f, v->payloads[p].ty, v->payloads[p].tname);
+                    }
+                    fputc(')', out);
+                }
+                if (k + 1 < en->nvariants || k > 0) fputc(',', out);
+                fputc('\n', out);
+            }
+            fputs("}\n", out);
+        } else {
+            fputs("\n", out);
         }
         (void)a;
         fputs("\n", out);

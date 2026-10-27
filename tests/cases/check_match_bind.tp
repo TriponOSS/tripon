@@ -1,0 +1,12 @@
+use tier core;
+
+enum Res { Good(i32), Empty }
+
+fn main() -> i32 {
+    let r = Res::Good(5);
+    match r {
+        Res::Good(a, b) => { print_i32(a); }
+        Res::Empty => { }
+    }
+    return 0;
+}

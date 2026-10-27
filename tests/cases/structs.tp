@@ -1,0 +1,28 @@
+use tier core;
+extern "C" { fn puts(p: str) -> i32; }
+
+struct Point { x: i32; y: i32; }
+struct Wrap { p: Point; n: i32; }
+
+fn scale(p: Point) -> Point {
+    return Point { x: p.x * 2, y: p.y * 2 };
+}
+
+fn main() -> i32 {
+    let a = Point { x: 1, y: 2, };
+    let b = scale(a);
+    if b.x == 2 && b.y == 4 { puts("by value ok"); }
+    let c = b;
+    if c.x == 2 { puts("copy ok"); }
+    a.x = 9;
+    a.y += 3;
+    print_i32(a.x);
+    print_i32(a.y);
+    let w = Wrap { p: b, n: 7 };
+    if w.p.y == 4 && w.n == 7 { puts("nested ok"); }
+    w.p.x += 1;
+    w.n *= 10;
+    print_i32(w.n);
+    print_i32(w.p.x);
+    return 0;
+}

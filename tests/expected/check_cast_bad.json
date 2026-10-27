@@ -1,0 +1,4 @@
+[
+  { "code": "E0207", "kind": "error", "name": "implicit-conversion-denied", "file": "tests/cases/check_cast_bad.tp", "line": 8, "col": 13, "len": 12, "msg": "cast<i32> from str is not a defined conversion", "hint": "no implicit conversions exist; use cast<T>(x) for exact or explicit lossy casts" },
+  { "code": "E0207", "kind": "error", "name": "implicit-conversion-denied", "file": "tests/cases/check_cast_bad.tp", "line": 11, "col": 16, "len": 6, "msg": "composite equality on Point is not defined; no cast exists for it", "hint": "compare field by field, or match on an enum tag instead" }
+]

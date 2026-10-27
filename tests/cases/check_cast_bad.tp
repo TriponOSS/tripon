@@ -1,0 +1,13 @@
+use tier core;
+extern "C" { fn puts(p: str) -> i32; }
+
+struct Point { x: i32; y: i32; }
+
+fn main() -> i32 {
+    let s = "hello";
+    let n = cast<i32>(s);
+    let p = Point { x: 1, y: 2 };
+    let q = Point { x: 1, y: 2 };
+    let same = p == q;
+    return 0;
+}

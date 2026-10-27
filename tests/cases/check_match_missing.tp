@@ -1,0 +1,12 @@
+use tier core;
+
+enum Color { Red, Green, Blue }
+
+fn main() -> i32 {
+    let c = Color::Red;
+    match c {
+        Color::Red => { }
+        Color::Green => { }
+    }
+    return 0;
+}

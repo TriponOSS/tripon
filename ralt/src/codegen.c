@@ -14,6 +14,11 @@ typedef struct {
     bool fast;
     FnDecl **funcs;
     int nfuncs;
+    StDecl **sts;
+    int nsts;
+    EnDecl **ens;
+    int nens;
+    int nmatch;             /* scrutinee temp counter, decl order keeps it deterministic */
     const char *file;
 } Cg;
 
@@ -50,6 +55,32 @@ static const char *cg_fnname(Cg *g, FnDecl *fn) {
     char *out = arena_alloc(g->a, strlen(fn->name) + 4);
     snprintf(out, (size_t)(strlen(fn->name) + 4), "tp_%s", fn->name);
     return out;
+}
+
+/* C name for a Tripon type: composites map to their tp_-prefixed typedef */
+static const char *tp_type_name(Cg *g, Ty t, const char *tname) {
+    if (t == TY_STRUCT || t == TY_ENUM || t == TY_TYPEDEF) {
+        size_t n = strlen(tname ? tname : "TpType");
+        char *out = arena_alloc(g->a, n + 4);
+        snprintf(out, n + 4, "tp_%s", tname ? tname : "TpType");
+        return out;
+    }
+    return ty_cname(t);
+}
+
+static EnDecl *cg_enum(Cg *g, const char *name) {
+    for (int i = 0; i < g->nens; i++)
+        if (strcmp(g->ens[i]->name, name) == 0) return g->ens[i];
+    return NULL;
+}
+
+/* tag index of a variant in its enum (declaration order = deterministic tag) */
+static int cg_variant_index(Cg *g, const char *ename, const char *vname) {
+    EnDecl *en = ename ? cg_enum(g, ename) : NULL;
+    if (!en) return -1;
+    for (int i = 0; i < en->nvariants; i++)
+        if (strcmp(en->variants[i].name, vname) == 0) return i;
+    return -1;
 }
 
 static void c_str_lit(Cg *g, const char *s, size_t len) {
@@ -110,6 +141,46 @@ static void emit_prologue(Cg *g) {
     fputs("static int32_t tp_builtin_len(const char *x) { return (int32_t)strlen(x); }\n", g->out);
     fputs("static int tp_str_eq(const char *a, const char *b) { return strcmp(a, b) == 0; }\n", g->out);
     fputs("static double tp_pow_f64(double a, double b) { return pow(a, b); }\n", g->out);
+}
+
+/* ---------------- user types ---------------- */
+
+/* structs in declaration order: fields reference only earlier typedefs (prepass).
+ * enums: tagged value struct, payload union keyed by variant name. */
+static void emit_typedefs(Cg *g) {
+    fputs("\n/* ---- user types ---- */\n", g->out);
+    for (int i = 0; i < g->nsts; i++) {
+        StDecl *st = g->sts[i];
+        fprintf(g->out, "typedef struct tp_%s {\n", st->name);
+        for (int f = 0; f < st->nfields; f++)
+            fprintf(g->out, "    %s %s;\n",
+                    tp_type_name(g, st->fields[f].ty, st->fields[f].tname),
+                    cg_ident(g, st->fields[f].name));
+        fprintf(g->out, "} tp_%s;\n", st->name);
+    }
+    for (int i = 0; i < g->nens; i++) {
+        EnDecl *en = g->ens[i];
+        fprintf(g->out, "typedef struct tp_%s {\n    int32_t tp_tag;\n    union {\n", en->name);
+        bool any_payload = false;
+        for (int v = 0; v < en->nvariants; v++) {
+            Variant *va = &en->variants[v];
+            if (va->npayloads == 0) continue;
+            any_payload = true;
+            const char *vn = cg_ident(g, va->name);
+            if (va->npayloads == 1) {
+                fprintf(g->out, "        %s %s;\n",
+                        tp_type_name(g, va->payloads[0].ty, va->payloads[0].tname), vn);
+            } else {
+                fprintf(g->out, "        struct {\n");
+                for (int k = 0; k < va->npayloads; k++)
+                    fprintf(g->out, "            %s tp_p%d;\n",
+                            tp_type_name(g, va->payloads[k].ty, va->payloads[k].tname), k);
+                fprintf(g->out, "        } %s;\n", vn);
+            }
+        }
+        if (!any_payload) fputs("        char tp_pad;\n", g->out);
+        fprintf(g->out, "    } tp_as;\n} tp_%s;\n", en->name);
+    }
 }
 
 /* ---------------- expression emission ---------------- */
@@ -200,9 +271,7 @@ static void emit_bin(Cg *g, Expr *e) {
 
         /* narrow ints: widen -> guarded/plain i32 math -> narrow recheck */
         if (is_int && narrow_helper(t)) {
-            fputs("(", g->out);
-            fputs(narrow_helper(t), g->out);
-            fputs("((", g->out);
+            fprintf(g->out, "%s((", narrow_helper(t));    /* helper( ( arith */
             if (is_div) {
                 fprintf(g->out, "%s((int32_t)", div_helper(TY_I32, e->op == TK_PERCENT));
                 emit_expr(g, e->lhs);
@@ -220,11 +289,12 @@ static void emit_bin(Cg *g, Expr *e) {
                 emit_expr(g, e->lhs);
                 fputs(", (int32_t)", g->out);
                 emit_expr(g, e->rhs);
+                cg_trap_args(g, e->span);
                 fputs(")", g->out);
             }
-            fputs("))", g->out);   /* close: narrow( ..., ... ) then the outer ( */
+            fputs(")", g->out);    /* close the widened arith group */
             cg_trap_args(g, e->span);
-            fputs(")", g->out);    /* close the narrow recheck call itself */
+            fputs(")", g->out);    /* close the narrow recheck helper */
             break;
         }
 
@@ -270,6 +340,35 @@ static bool is_builtin(const char *name) {
     for (size_t i = 0; i < sizeof B / sizeof B[0]; i++)
         if (strcmp(B[i], name) == 0) return true;
     return false;
+}
+
+/* int target casts: int->int (narrowing through the tp_nar guard helpers, same
+ * recheck path as narrow arith so -fast semantics stay defined), float->int
+ * truncates toward zero through the same helpers. */
+static void emit_cast_to_int(Cg *g, Expr *e, Ty tt) {
+    switch (tt) {
+    case TY_I8:
+    case TY_I16:
+    case TY_U8:
+    case TY_U16: {
+        const char *h = tt == TY_I8 ? "tp_nar8_g" : tt == TY_I16 ? "tp_nar16_g"
+                      : tt == TY_U8 ? "tp_naru8_g" : "tp_naru16_g";
+        fprintf(g->out, "%s((int32_t)(", h);
+        emit_expr(g, e->operand);
+        fputs(")", g->out);
+        cg_trap_args(g, e->span);
+        fputc(')', g->out);
+        return;
+    }
+    case TY_I32: fputs("(int32_t)", g->out); break;
+    case TY_I64: fputs("(int64_t)", g->out); break;
+    case TY_U32: fputs("(uint32_t)", g->out); break;
+    case TY_U64: fputs("(uint64_t)", g->out); break;
+    case TY_ISIZE: fputs("(intptr_t)", g->out); break;
+    case TY_USIZE: fputs("(uintptr_t)", g->out); break;
+    default: break;
+    }
+    emit_expr(g, e->operand);
 }
 
 static void emit_expr(Cg *g, Expr *e) {
@@ -321,6 +420,50 @@ static void emit_expr(Cg *g, Expr *e) {
     case EX_BIN:
         emit_bin(g, e);
         break;
+    case EX_FIELD:
+        emit_expr(g, e->base);
+        fputc('.', g->out);
+        fputs(cg_ident(g, e->sval), g->out);
+        break;
+    case EX_STRUCTINIT: {
+        fprintf(g->out, "(tp_%s){", e->sval);
+        for (int i = 0; i < e->nargs; i++) {
+            if (i) fputs(", ", g->out);
+            fprintf(g->out, ".%s = ", cg_ident(g, e->inames[i]));
+            emit_expr(g, e->args[i]);
+        }
+        fputc('}', g->out);
+        break;
+    }
+    case EX_VARIANT: {
+        int tag = cg_variant_index(g, e->sval, e->vname);
+        EnDecl *en = cg_enum(g, e->sval);
+        Variant *v = NULL;
+        if (en && tag >= 0) v = &en->variants[tag];
+        fprintf(g->out, "(tp_%s){ .tp_tag = %d", e->sval, tag < 0 ? 0 : tag);
+        if (v && v->npayloads == 1 && e->nargs == 1) {
+            fprintf(g->out, ", .tp_as = { .%s = ", cg_ident(g, v->name));
+            emit_expr(g, e->args[0]);
+            fputs(" }", g->out);
+        } else if (v && v->npayloads > 1 && e->nargs == v->npayloads) {
+            fprintf(g->out, ", .tp_as = { .%s = { ", cg_ident(g, v->name));
+            for (int i = 0; i < e->nargs; i++) {
+                if (i) fputs(", ", g->out);
+                emit_expr(g, e->args[i]);
+            }
+            fputs(" } }", g->out);
+        }
+        fputs(" }", g->out);
+        break;
+    }
+    case EX_CAST: {
+        Ty tt = e->ty;
+        if (ty_is_int(tt)) emit_cast_to_int(g, e, tt);
+        else if (tt == TY_F64) { fputs("(double)", g->out); emit_expr(g, e->operand); }
+        else if (tt == TY_F32) { fputs("(float)", g->out); emit_expr(g, e->operand); }
+        else emit_expr(g, e->operand);   /* identity: same-type cast */
+        break;
+    }
     default:
         break;
     }
@@ -328,10 +471,18 @@ static void emit_expr(Cg *g, Expr *e) {
 
 /* ---------------- statements ---------------- */
 
+/* assignment targets: bindings and struct field chains */
+static void emit_lvalue(Cg *g, Expr *t) {
+    if (t->kind == EX_IDENT) fputs(cg_ident(g, t->sval), g->out);
+    else if (t->kind == EX_FIELD) emit_expr(g, t);
+    else fputs(cg_ident(g, t->kind == EX_IDENT ? t->sval : "?"), g->out);
+}
+
 static void emit_stmt(Cg *g, Stmt *s) {
     switch (s->kind) {
     case ST_LET: {
         bool hasinit = s->init != NULL;
+        const char *ty = tp_type_name(g, s->ty, s->tname);
         if (!hasinit) {
             const char *zero = "0";
             switch (s->ty) {
@@ -339,11 +490,12 @@ static void emit_stmt(Cg *g, Stmt *s) {
             case TY_F64: zero = "0.0"; break;
             case TY_BOOL: zero = "false"; break;
             case TY_STR: zero = "\"\""; break;
+            case TY_STRUCT: case TY_ENUM: zero = "{0}"; break;
             default: zero = "0"; break;
             }
-            fprintf(g->out, "%s %s = %s;\n", ty_cname(s->ty), cg_ident(g, s->name), zero);
+            fprintf(g->out, "%s %s = %s;\n", ty, cg_ident(g, s->name), zero);
         } else {
-            fprintf(g->out, "%s %s = ", ty_cname(s->ty), cg_ident(g, s->name));
+            fprintf(g->out, "%s %s = ", ty, cg_ident(g, s->name));
             emit_expr(g, s->init);
             fputs(";\n", g->out);
         }
@@ -351,9 +503,9 @@ static void emit_stmt(Cg *g, Stmt *s) {
     }
     case ST_ASSIGN: {
         Expr *t = s->target;
-        const char *ident = cg_ident(g, t->kind == EX_IDENT ? t->sval : "?");
         if (s->aop == TK_ASSIGN) {
-            fprintf(g->out, "%s = ", ident);
+            emit_lvalue(g, t);
+            fputs(" = ", g->out);
             emit_expr(g, s->value);
             fputs(";\n", g->out);
             break;
@@ -373,7 +525,8 @@ static void emit_stmt(Cg *g, Stmt *s) {
         case TK_DIVEQ: fake.op = TK_SLASH; break;
         default: fake.op = TK_PERCENT; break;
         }
-        fprintf(g->out, "%s = ", ident);
+        emit_lvalue(g, t);
+        fputs(" = ", g->out);
         emit_expr(g, &fake);
         fputs(";\n", g->out);
         break;
@@ -425,6 +578,51 @@ static void emit_stmt(Cg *g, Stmt *s) {
         for (int i = 0; i < s->nbody; i++) emit_stmt(g, s->body[i]);
         fputs("}\n", g->out);
         break;
+    case ST_MATCH: {
+        /* scrutinee into a temp (payload binds re-read it), switch on tag */
+        int mi = g->nmatch++;
+        Ty st = s->cond->ty;
+        fputs("{\n", g->out);
+        fprintf(g->out, "%s tp_m%d = ", st == TY_ENUM ? tp_type_name(g, st, s->cond->tname)
+                : ty_cname(st), mi);
+        emit_expr(g, s->cond);
+        fprintf(g->out, ";\nswitch (tp_m%d%s) {\n", mi, st == TY_ENUM ? ".tp_tag" : "");
+        MatchArm *wild = NULL;
+        for (int a = 0; a < s->narms; a++) {
+            MatchArm *arm = s->arms[a];
+            if (arm->pkind == PAT_WILD) { wild = arm; continue; }
+            int tag;
+            if (arm->pkind == PAT_VARIANT) {
+                tag = cg_variant_index(g, arm->ename ? arm->ename : s->cond->tname, arm->vname);
+            } else if (arm->pkind == PAT_LIT_INT) {
+                tag = (int)arm->ival;
+            } else if (arm->pkind == PAT_LIT_BOOL) {
+                tag = arm->bval ? 1 : 0;
+            } else tag = -1;
+            if (tag < 0) continue;
+            fprintf(g->out, "case %d: {\n", tag);
+            if (arm->pkind == PAT_VARIANT) {
+                EnDecl *en = cg_enum(g, arm->ename ? arm->ename : s->cond->tname);
+                Variant *v = en ? &en->variants[tag] : NULL;
+                for (int k = 0; v && k < v->npayloads && k < arm->nbinds; k++) {
+                    fprintf(g->out, "%s %s = tp_m%d.tp_as.%s",
+                            tp_type_name(g, v->payloads[k].ty, v->payloads[k].tname),
+                            cg_ident(g, arm->binds[k]), mi, cg_ident(g, v->name));
+                    if (v->npayloads > 1) fprintf(g->out, ".tp_p%d", k);
+                    fputs(";\n", g->out);
+                }
+            }
+            for (int i = 0; i < arm->nbody; i++) emit_stmt(g, arm->body[i]);
+            fprintf(g->out, "} break;\n");
+        }
+        if (wild) {
+            fputs("default: {\n", g->out);
+            for (int i = 0; i < wild->nbody; i++) emit_stmt(g, wild->body[i]);
+            fputs("} break;\n", g->out);
+        }
+        fputs("}\n}\n", g->out);
+        break;
+    }
     default:
         break;
     }
@@ -438,21 +636,21 @@ static void emit_fn_proto(Cg *g, FnDecl *fn) {
         fputs("int main(void);\n", g->out);
         return;
     }
-    fprintf(g->out, "static %s %s(", ty_cname(fn->ret), cg_fnname(g, fn));
+    fprintf(g->out, "static %s %s(", tp_type_name(g, fn->ret, fn->retname), cg_fnname(g, fn));
     if (fn->nparams == 0) fputs("void", g->out);
     for (int i = 0; i < fn->nparams; i++) {
         if (i) fputs(", ", g->out);
-        fprintf(g->out, "%s %s", ty_cname(fn->params[i].ty), cg_ident(g, fn->params[i].name));
+        fprintf(g->out, "%s %s", tp_type_name(g, fn->params[i].ty, fn->params[i].tname), cg_ident(g, fn->params[i].name));
     }
     fputs(");\n", g->out);
 }
 
 static void emit_fn(Cg *g, FnDecl *fn) {
     if (fn->is_extern) {
-        fprintf(g->out, "extern %s %s(", ty_cname(fn->ret), fn->name);
+        fprintf(g->out, "extern %s %s(", tp_type_name(g, fn->ret, fn->retname), fn->name);
         for (int i = 0; i < fn->nparams; i++) {
             if (i) fputs(", ", g->out);
-            fputs(ty_cname(fn->params[i].ty), g->out);
+            fputs(tp_type_name(g, fn->params[i].ty, fn->params[i].tname), g->out);
         }
         fputs(");\n", g->out);
         return;
@@ -461,11 +659,11 @@ static void emit_fn(Cg *g, FnDecl *fn) {
     if (is_main) {
         fprintf(g->out, "int main(void) {\n");
     } else {
-        fprintf(g->out, "static %s %s(", ty_cname(fn->ret), cg_fnname(g, fn));
+        fprintf(g->out, "static %s %s(", tp_type_name(g, fn->ret, fn->retname), cg_fnname(g, fn));
         if (fn->nparams == 0) fputs("void", g->out);
         for (int i = 0; i < fn->nparams; i++) {
             if (i) fputs(", ", g->out);
-            fprintf(g->out, "%s %s", ty_cname(fn->params[i].ty), cg_ident(g, fn->params[i].name));
+            fprintf(g->out, "%s %s", tp_type_name(g, fn->params[i].ty, fn->params[i].tname), cg_ident(g, fn->params[i].name));
         }
         fputs(") {\n", g->out);
     }
@@ -477,6 +675,8 @@ static void emit_fn(Cg *g, FnDecl *fn) {
         else if (fn->ret == TY_F64) fputs("return 0.0;\n", g->out);
         else if (fn->ret == TY_BOOL) fputs("return false;\n", g->out);
         else if (fn->ret == TY_STR) fputs("return \"\";\n", g->out);
+        else if (fn->ret == TY_STRUCT || fn->ret == TY_ENUM)
+            fprintf(g->out, "return (tp_%s){0};\n", fn->retname ? fn->retname : "TpType");
         else fprintf(g->out, "return 0;\n");
     }
     if (is_main && fn->ret == TY_VOID) fputs("return 0;\n", g->out);
@@ -495,11 +695,17 @@ void codegen_file(Arena *a, Decl **decls, int ndecls, const char *outpath, bool 
     g.a = a;
     g.fast = fast;
     g.funcs = arena_alloc(a, sizeof(FnDecl *) * (size_t)(ndecls ? ndecls : 1));
-    for (int i = 0; i < ndecls; i++)
+    g.sts = arena_alloc(a, sizeof(StDecl *) * (size_t)(ndecls ? ndecls : 1));
+    g.ens = arena_alloc(a, sizeof(EnDecl *) * (size_t)(ndecls ? ndecls : 1));
+    for (int i = 0; i < ndecls; i++) {
         if (decls[i]->kind == D_FN) g.funcs[g.nfuncs++] = decls[i]->fn;
+        else if (decls[i]->kind == D_STRUCT) g.sts[g.nsts++] = decls[i]->st;
+        else if (decls[i]->kind == D_ENUM) g.ens[g.nens++] = decls[i]->en;
+    }
     if (ndecls && decls[0]->span.file) g.file = decls[0]->span.file;
 
     emit_prologue(&g);
+    emit_typedefs(&g);
     fputs("\n/* ---- extern blocks ---- */\n", out);
     for (int i = 0; i < ndecls; i++)
         if (decls[i]->kind == D_FN && decls[i]->fn->is_extern) emit_fn(&g, decls[i]->fn);

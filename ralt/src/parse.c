@@ -7,6 +7,7 @@ typedef struct {
     int ntoks, pos;
     Arena *a;
     const char *file;
+    int si_ok;   /* struct-init IDENT '{' currently allowed (suppressed in if/while/match conditions) */
 } Parser;
 
 static Token *peek(Parser *p) { return &p->toks[p->pos]; }
@@ -36,7 +37,10 @@ static Token *expect_token(Parser *p, TokKind k, const char *what) {
 
 /* ---------------- types ---------------- */
 
-static Ty parse_type(Parser *p) {
+/* Builtins map straight to Ty. Any other ident is a nominal struct/enum name
+ * (TY_TYPEDEF): the typecheck pre-pass resolves it against the decl tables. */
+static Ty parse_type(Parser *p, const char **tname) {
+    if (tname) *tname = NULL;
     if (eat(p, TK_LP) && eat(p, TK_RP)) {
         return TY_VOID;     /* "()" = unit/void */
     }
@@ -50,9 +54,8 @@ static Ty parse_type(Parser *p) {
     };
     for (size_t i = 0; i < sizeof TYPES / sizeof TYPES[0]; i++)
         if (strcmp(TYPES[i].n, t->text) == 0) return TYPES[i].ty;
-    diag(t->span, E0101, SEV_ERROR, "unknown type name",
-         "builtins: i8 i16 i32 i64 u8 u16 u32 u64 isize usize f32 f64 bool str ()");
-    return TY_UNSET;
+    if (tname) *tname = t->text;
+    return TY_TYPEDEF;
 }
 
 /* ---------------- expressions ---------------- */
@@ -103,6 +106,52 @@ static Expr *parse_primary(Parser *p) {
         advance(p);
         e->sval = t->text;
         e->ty = TY_UNSET;
+        /* variant value: Enum::Variant [ ( payloads ) ] */
+        if (at(p, TK_COLON2)) {
+            advance(p);
+            Token *vn = expect_token(p, TK_IDENT, "a variant name after '::'");
+            e->kind = EX_VARIANT;
+            e->vname = vn->text;
+            e->span.len = vn->span.col + vn->span.len - t->span.col;
+            if (at(p, TK_LP)) {
+                advance(p);
+                while (!at(p, TK_RP) && !at(p, TK_EOF)) {
+                    Expr **na = realloc(e->args == NULL ? malloc(0) : e->args,
+                                        (size_t)(e->nargs + 1) * sizeof(Expr *));
+                    if (!na) exit(1);
+                    e->args = na;
+                    e->args[e->nargs++] = parse_expr(p);
+                    if (!eat(p, TK_COMMA)) break;
+                }
+                expect_token(p, TK_RP, "')' to close the payload values");
+            }
+            return e;
+        }
+        /* struct init: Ident { inits, ... } (suppressed where a block may follow an expression) */
+        if (at(p, TK_BRACE_L) && p->si_ok) {
+            e->kind = EX_STRUCTINIT;
+            advance(p);
+            while (!at(p, TK_BRACE_R) && !at(p, TK_EOF)) {
+                Token *fn = expect_token(p, TK_IDENT, "a field name in the struct init");
+                const char **na = realloc(e->inames == NULL ? malloc(0) : e->inames,
+                                          (size_t)(e->nargs + 1) * sizeof(char *));
+                Expr **na2 = realloc(e->args == NULL ? malloc(0) : e->args,
+                                     (size_t)(e->nargs + 1) * sizeof(Expr *));
+                if (!na || !na2) exit(1);
+                e->inames = na;
+                e->args = na2;
+                e->inames[e->nargs] = fn->text;
+                if (eat(p, TK_COLON)) e->args[e->nargs++] = parse_expr(p);
+                else {  /* shorthand { x } uses the binding x */
+                    Expr *sh = new_expr(p, EX_IDENT, fn->span);
+                    sh->sval = fn->text;
+                    e->args[e->nargs++] = sh;
+                }
+                if (!eat(p, TK_COMMA)) break;
+            }
+            expect_token(p, TK_BRACE_R, "'}' to close the struct init");
+            return e;
+        }
         /* call: ident ( args ) */
         if (at(p, TK_LP)) {
             advance(p);
@@ -120,9 +169,25 @@ static Expr *parse_primary(Parser *p) {
         }
         return e;
     }
+    case TK_CAST: {
+        /* the one conversion builtin: cast<T>(expr); target types are v0 numeric only */
+        Expr *e = new_expr(p, EX_CAST, t->span);
+        advance(p);
+        expect_token(p, TK_LT, "'<' to open the cast target");
+        e->ty = parse_type(p, &e->sval);
+        expect_token(p, TK_GT, "'>' to close the cast target");
+        expect_token(p, TK_LP, "'(' to open the cast operand");
+        e->operand = parse_expr(p);
+        expect_token(p, TK_RP, "')' to close the cast operand");
+        /* diag span covers the whole call: cast keyword through ')' */
+        Token *close = peekn(p, -1);
+        if (close->span.line == t->span.line)
+            e->span.len = close->span.col + close->span.len - t->span.col;
+        return e;
+    }
     case TK_MATCH: {
-        diag(t->span, E0101, SEV_ERROR, "match is parsed from P1.1",
-             "spec/grammar.ebnf defines it; ralt compiles it in P1.1");
+        diag(t->span, E0101, SEV_ERROR, "match as an expression lands in a later slice",
+             "match is a statement in P1.1; bind results to a let inside the arms");
         advance(p);
         return new_expr(p, EX_INT, t->span);
     }
@@ -160,15 +225,22 @@ static Expr *parse_unary(Parser *p) {
     Expr *e = parse_primary(p);
     for (;;) {
         if (at(p, TK_DOT)) {
-            diag(peek(p)->span, E0101, SEV_ERROR, "member access lands with structs (P1.1)",
-                 "no methods exist on builtins yet");
             advance(p);
-            advance(p);
+            Token *fn = expect_token(p, TK_IDENT, "a field name after '.'");
+            Expr *f = new_expr(p, EX_FIELD, e->span);
+            f->base = e;
+            f->sval = fn->text;
+            f->span.len = fn->span.col + fn->span.len - e->span.col;
+            if (at(p, TK_LP)) {
+                diag(fn->span, E0101, SEV_ERROR, "methods are not a thing in v0",
+                     "fields are plain data; move the logic into a fn");
+            }
+            e = f;
             continue;
         }
         if (at(p, TK_LB)) {
             diag(peek(p)->span, E0101, SEV_ERROR, "indexing lands with slices (P1.2)",
-                 "fixed arrays arrive with structs in P1.1");
+                 "fixed arrays arrive with slices");
             advance(p);
             advance(p);
             continue;
@@ -234,10 +306,20 @@ static Stmt *new_stmt(Parser *p, StKind k, Span sp) {
 
 static Stmt *parse_block_stmt(Parser *p);  /* always returns a ST_BLOCK */
 
+/* conditions and match scrutinees: `ident {` would be ambiguous with the
+ * following block, so struct inits are suppressed there (parenthesize instead) */
+static Expr *parse_cond_expr(Parser *p) {
+    int save = p->si_ok;
+    p->si_ok = 0;
+    Expr *e = parse_expr(p);
+    p->si_ok = save;
+    return e;
+}
+
 static Stmt *parse_if(Parser *p) {
     Token *ifkw = advance(p); /* if */
     Stmt *s = new_stmt(p, ST_IF, ifkw->span);
-    s->cond = parse_expr(p);
+    s->cond = parse_cond_expr(p);
     Stmt *blk = parse_block_stmt(p);
     s->body = blk->body;
     s->nbody = blk->nbody;
@@ -251,10 +333,81 @@ static Stmt *parse_if(Parser *p) {
 static Stmt *parse_while(Parser *p) {
     Token *kw = advance(p);
     Stmt *s = new_stmt(p, ST_WHILE, kw->span);
-    s->cond = parse_expr(p);
+    s->cond = parse_cond_expr(p);
     Stmt *blk = parse_block_stmt(p);
     s->body = blk->body;
     s->nbody = blk->nbody;
+    return s;
+}
+
+/* ---------------- match ---------------- */
+
+static void parse_pattern(Parser *p, MatchArm *arm) { /* fills arm pattern fields */
+    Token *t = peek(p);
+    arm->span = t->span;
+    if (t->kind == TK_INT) { arm->pkind = PAT_LIT_INT; arm->ival = t->ival; advance(p); return; }
+    if (t->kind == TK_TRUE || t->kind == TK_FALSE) {
+        arm->pkind = PAT_LIT_BOOL; arm->bval = t->kind == TK_TRUE; advance(p); return;
+    }
+    if (t->kind != TK_IDENT) {
+        char msg[120];
+        advance(p);
+        snprintf(msg, sizeof msg, "unsupported pattern form, got %s", tok_kind_word(t->kind));
+        diag(t->span, E0101, SEV_ERROR, msg, "patterns: literal, variant, '_' wildcards");
+        return;
+    }
+    advance(p);
+    if (strcmp(t->text, "_") == 0) {    /* wildcard */
+        arm->pkind = PAT_WILD;
+        return;
+    }
+    arm->pkind = PAT_VARIANT;
+    if (at(p, TK_COLON2)) {
+        advance(p);
+        arm->ename = t->text;
+        Token *vn = expect_token(p, TK_IDENT, "a variant name after '::'");
+        arm->vname = vn->text;
+        arm->span.len = vn->span.col + vn->span.len - t->span.col;
+    } else {
+        arm->ename = NULL;              /* bare: resolved against the scrutinee */
+        arm->vname = t->text;
+        arm->span.len = t->span.len;
+    }
+    if (at(p, TK_LP)) {
+        advance(p);
+        while (!at(p, TK_RP) && !at(p, TK_EOF)) {
+            Token *bn = expect_token(p, TK_IDENT, "a pattern binding name");
+            const char **na = realloc(arm->binds == NULL ? malloc(0) : arm->binds,
+                                      (size_t)(arm->nbinds + 1) * sizeof(char *));
+            if (!na) exit(1);
+            arm->binds = na;
+            arm->binds[arm->nbinds++] = bn->text;
+            if (!eat(p, TK_COMMA)) break;
+        }
+        expect_token(p, TK_RP, "')' to close the pattern bindings");
+    }
+    return;
+}
+
+static Stmt *parse_match(Parser *p) {
+    Token *kw = advance(p);
+    Stmt *s = new_stmt(p, ST_MATCH, kw->span);
+    s->cond = parse_cond_expr(p);
+    expect_token(p, TK_BRACE_L, "'{' to open the match arms");
+    while (!at(p, TK_BRACE_R) && !at(p, TK_EOF)) {
+        MatchArm *arm = arena_zalloc(p->a, sizeof(MatchArm));
+        parse_pattern(p, arm);
+        expect_token(p, TK_FATARROW, "'=>' between pattern and arm");
+        Stmt *blk = parse_block_stmt(p);
+        arm->body = blk->body;
+        arm->nbody = blk->nbody;
+        MatchArm **na = arena_alloc(p->a, sizeof(MatchArm *) * (size_t)(s->narms + 1));
+        if (s->narms) memcpy(na, s->arms, sizeof(MatchArm *) * (size_t)s->narms);
+        na[s->narms++] = arm;
+        s->arms = na;
+        eat(p, TK_COMMA);               /* comma between arms is optional; blocks are unambiguous */
+    }
+    expect_token(p, TK_BRACE_R, "'}' to close the match arm list");
     return s;
 }
 
@@ -266,7 +419,7 @@ static Stmt *parse_var_decl(Parser *p) {
     Token *name = expect_token(p, TK_IDENT, "a binding name after let/const");
     s->name = name->text;
     s->span = kw->span;
-    if (eat(p, TK_COLON)) s->ty = parse_type(p);
+    if (eat(p, TK_COLON)) s->ty = parse_type(p, &s->tname);
     if (eat(p, TK_ASSIGN)) s->init = parse_expr(p);
     expect_token(p, TK_SEMI, "';' to end the statement");
     return s;
@@ -291,12 +444,8 @@ static Stmt *parse_stmt(Parser *p) {
         return parse_while(p);
     case TK_BRACE_L:
         return parse_block_stmt(p);
-    case TK_MATCH: {
-        diag(t->span, E0101, SEV_ERROR, "match lands in P1.1",
-             "spec/grammar.ebnf has the final shape; compiler support next slice");
-        advance(p);
-        return new_stmt(p, ST_BLOCK, t->span);
-    }
+    case TK_MATCH:
+        return parse_match(p);
     case TK_SEMI:  /* empty statement: allowed, no-op */
         advance(p);
         return new_stmt(p, ST_BLOCK, t->span);
@@ -346,7 +495,7 @@ static FnDecl *parse_fn_proto(Parser *p, bool extern_mode) {
         Param *np = arena_alloc(p->a, sizeof(Param));
         np->name = pn->text;
         np->span = pn->span;
-        np->ty = parse_type(p);
+        np->ty = parse_type(p, &np->tname);
         Param *na = realloc(fn->params == NULL ? malloc(0) : fn->params,
                             sizeof(Param) * (size_t)(fn->nparams + 1));
         if (!na) exit(1);
@@ -355,10 +504,73 @@ static FnDecl *parse_fn_proto(Parser *p, bool extern_mode) {
         if (!eat(p, TK_COMMA)) break;
     }
     expect_token(p, TK_RP, "')' to close parameters");
-    if (eat(p, TK_ARROW)) fn->ret = parse_type(p);
+    if (eat(p, TK_ARROW)) fn->ret = parse_type(p, &fn->retname);
     else fn->ret = TY_VOID;
     fn->is_extern = extern_mode;
     return fn;
+}
+
+static EnDecl *parse_enum(Parser *p) {
+    Token *kw = advance(p);  /* enum */
+    EnDecl *en = arena_zalloc(p->a, sizeof(EnDecl));
+    Token *name = expect_token(p, TK_IDENT, "an enum name");
+    en->name = name->text;
+    en->span = kw->span;
+    /* generics <T> arrive later: reject with a clear shape error */
+    expect_token(p, TK_BRACE_L, "'{' to open the enum variants");
+    while (!at(p, TK_BRACE_R) && !at(p, TK_EOF)) {
+        Token *vn = expect_token(p, TK_IDENT, "a variant name");
+        Variant *v = arena_alloc(p->a, sizeof(Variant));
+        v->name = vn->text;
+        v->span = vn->span;
+        if (eat(p, TK_LP)) {
+            while (!at(p, TK_RP) && !at(p, TK_EOF)) {
+                Payload *pl = arena_alloc(p->a, sizeof(Payload));
+                pl->ty = parse_type(p, &pl->tname);
+                pl->span = peekn(p, -1)->span;
+                Payload *na = realloc(v->payloads == NULL ? malloc(0) : v->payloads,
+                                      (size_t)(v->npayloads + 1) * sizeof(Payload));
+                if (!na) exit(1);
+                v->payloads = na;
+                v->payloads[v->npayloads++] = *pl;
+                if (!eat(p, TK_COMMA)) break;
+            }
+            expect_token(p, TK_RP, "')' to close the payload types");
+        }
+        Variant *na = realloc(en->variants == NULL ? malloc(0) : en->variants,
+                              (size_t)(en->nvariants + 1) * sizeof(Variant));
+        if (!na) exit(1);
+        en->variants = na;
+        en->variants[en->nvariants++] = *v;
+        if (!eat(p, TK_COMMA)) break;   /* comma between variants */
+    }
+    expect_token(p, TK_BRACE_R, "'}' to close the enum");
+    return en;
+}
+
+static StDecl *parse_struct(Parser *p) {
+    Token *kw = advance(p);  /* struct */
+    StDecl *st = arena_zalloc(p->a, sizeof(StDecl));
+    Token *name = expect_token(p, TK_IDENT, "a struct name");
+    st->name = name->text;
+    st->span = kw->span;
+    expect_token(p, TK_BRACE_L, "'{' to open the struct fields");
+    while (!at(p, TK_BRACE_R) && !at(p, TK_EOF)) {
+        Token *fn = expect_token(p, TK_IDENT, "a field name");
+        expect_token(p, TK_COLON, "':' before the field type");
+        StField *f = arena_alloc(p->a, sizeof(StField));
+        f->name = fn->text;
+        f->span = fn->span;
+        f->ty = parse_type(p, &f->tname);
+        expect_token(p, TK_SEMI, "';' after each field");
+        StField *na = realloc(st->fields == NULL ? malloc(0) : st->fields,
+                              (size_t)(st->nfields + 1) * sizeof(StField));
+        if (!na) exit(1);
+        st->fields = na;
+        st->fields[st->nfields++] = *f;
+    }
+    expect_token(p, TK_BRACE_R, "'}' to close the struct");
+    return st;
 }
 
 Decl **parse_file(Arena *a, Token *toks, int ntoks, const char *file) {
@@ -368,6 +580,7 @@ Decl **parse_file(Arena *a, Token *toks, int ntoks, const char *file) {
     p.ntoks = ntoks;
     p.a = a;
     p.file = file;
+    p.si_ok = 1;               /* struct init allowed by default; conditions suppress */
 
     VecDecl out;
     memset(&out, 0, sizeof out);
@@ -422,10 +635,21 @@ Decl **parse_file(Arena *a, Token *toks, int ntoks, const char *file) {
             vec_push_ptr((VecPtr *)&out, d);
             continue;
         }
-        if (at(&p, TK_STRUCT) || at(&p, TK_ENUM)) {
-            diag(peek(&p)->span, E0101, SEV_ERROR, "struct/enum land in P1.1",
-                 "they are in spec/grammar.ebnf; compiler support is the next slice");
-            break;
+        if (at(&p, TK_STRUCT)) {
+            StDecl *st = parse_struct(&p);
+            Decl *d = arena_zalloc(a, sizeof(Decl));
+            d->kind = D_STRUCT;
+            d->st = st;
+            vec_push_ptr((VecPtr *)&out, d);
+            continue;
+        }
+        if (at(&p, TK_ENUM)) {
+            EnDecl *en = parse_enum(&p);
+            Decl *d = arena_zalloc(a, sizeof(Decl));
+            d->kind = D_ENUM;
+            d->en = en;
+            vec_push_ptr((VecPtr *)&out, d);
+            continue;
         }
         Span sp = peek(&p)->span;
         char msg[160];

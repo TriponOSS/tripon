@@ -1,0 +1,4 @@
+[
+  { "code": "E0202", "kind": "error", "name": "type-mismatch", "file": "tests/cases/check_field.tp", "line": 6, "col": 13, "len": 5, "msg": "struct 'Point' has no field 'z'", "hint": "check the field list in the struct decl" },
+  { "code": "E0202", "kind": "error", "name": "type-mismatch", "file": "tests/cases/check_field.tp", "line": 6, "col": 13, "len": 5, "msg": "missing field 'y' in struct init", "hint": "initialize every declared field" }
+]

@@ -79,7 +79,15 @@ void deps_free(char ***paths, int count);
 #define E0203 203
 #define E0204 204
 #define E0205 205
+#define E0206 206
+#define E0207 207
+#define E0212 212
+#define E0301 301
+#define E0302 302
 #define E0501 501
+#define E9001 9001
+#define E9002 9002
+#define E9003 9003
 #define E0601 601
 #define E0602 602
 #define E0603 603
@@ -101,7 +109,7 @@ typedef enum {
 
     /* keywords */
     TK_FN, TK_LET, TK_CONST, TK_RETURN, TK_IF, TK_ELSE, TK_WHILE,
-    TK_MATCH, TK_STRUCT, TK_ENUM, TK_USE, TK_TIER, TK_EXTERN,
+    TK_MATCH, TK_STRUCT, TK_ENUM, TK_USE, TK_TIER, TK_EXTERN, TK_CAST,
     TK_TRUE, TK_FALSE, TK_MUT, TK_PUB,
 
     /* punctuation */
@@ -129,6 +137,8 @@ typedef enum {
     TY_I8, TY_I16, TY_I32, TY_I64,
     TY_U8, TY_U16, TY_U32, TY_U64, TY_ISIZE, TY_USIZE,
     TY_F32, TY_F64, TY_BOOL, TY_STR, TY_VOID,
+    TY_STRUCT, TY_ENUM,     /* resolved by name via decl tables */
+    TY_TYPEDEF,             /* parsed name, pre-pass resolves it */
     TY_UNSET, /* pre-inference */
 } Ty;
 
@@ -148,6 +158,7 @@ typedef struct Decl Decl;
 typedef enum {
     EX_INT, EX_FLOAT, EX_STR, EX_BOOL, EX_IDENT,
     EX_BIN, EX_UN, EX_CALL, EX_INDEX,
+    EX_FIELD, EX_STRUCTINIT, EX_VARIANT, EX_CAST,
 } ExKind;
 
 typedef enum { UN_NOT, UN_NEG, UN_ADDR } UnOp;
@@ -160,20 +171,73 @@ struct Expr {
 
     long long ival;         /* EX_INT */
     double fval;            /* EX_FLOAT */
-    const char *sval; size_t slen; /* EX_STR, EX_IDENT */
+    const char *sval; size_t slen; /* EX_STR, EX_IDENT, EX_FIELD field name,
+                                      EX_STRUCTINIT/EX_VARIANT/EX_CAST: type name */
     bool bval;              /* EX_BOOL */
 
     TokKind op;             /* EX_BIN */
     Expr *lhs, *rhs;
-    UnOp unop; Expr *operand; /* EX_UN */
+    UnOp unop; Expr *operand; /* EX_UN, EX_CAST */
 
-    Expr **args; int nargs; /* EX_CALL */
+    Expr **args; int nargs; /* EX_CALL, EX_VARIANT payloads, EX_STRUCTINIT inits */
     const char *callee;
 
-    Expr *base, *index;     /* EX_INDEX */
+    const char *vname;      /* EX_VARIANT: variant name */
+    const char **inames;    /* EX_STRUCTINIT: field init names, aligned with args */
+    const char *tname;      /* resolved struct/enum name of e->ty */
+
+    Expr *base, *index;     /* EX_INDEX, EX_FIELD (base) */
 };
 
-typedef enum { ST_LET, ST_ASSIGN, ST_RETURN, ST_IF, ST_WHILE, ST_EXPR, ST_BLOCK } StKind;
+/* struct Type = Ident ":" Type ";" (annotated spans used by future tooling) */
+typedef struct StField {
+    const char *name;
+    Ty ty;
+    const char *tname;      /* when ty is TY_STRUCT/TY_ENUM/TY_TYPEDEF */
+    Span span;
+} StField;
+
+typedef struct StDecl {
+    const char *name;
+    StField *fields; int nfields;
+    Span span;
+} StDecl;
+
+typedef struct Payload {
+    Ty ty;
+    const char *tname;
+    Span span;
+} Payload;
+
+typedef struct Variant {
+    const char *name;
+    Payload *payloads; int npayloads;
+    Span span;
+} Variant;
+
+typedef struct EnDecl {
+    const char *name;
+    Variant *variants; int nvariants;
+    Span span;
+} EnDecl;
+
+/* ---------------- match arms ---------------- */
+
+typedef enum { PAT_WILD, PAT_LIT_INT, PAT_LIT_BOOL, PAT_VARIANT } PatKind;
+
+typedef struct MatchArm {
+    PatKind pkind;
+    Span span;              /* pattern span */
+    long long ival;         /* PAT_LIT_INT */
+    bool bval;              /* PAT_LIT_BOOL */
+    const char *ename;      /* PAT_VARIANT: enum name, NULL = bare ident */
+    const char *vname;
+    const char **binds; int nbinds;   /* payload pattern vars */
+    Stmt **body; int nbody; /* arm block */
+} MatchArm;
+
+typedef enum { ST_LET, ST_ASSIGN, ST_RETURN, ST_IF, ST_WHILE, ST_MATCH,
+               ST_EXPR, ST_BLOCK } StKind;
 
 struct Stmt {
     StKind kind;
@@ -182,23 +246,28 @@ struct Stmt {
     /* ST_LET */
     const char *name;
     Ty ty;
+    const char *tname;      /* when ty is a struct/enum type */
     bool is_const;
     Expr *init;
 
     /* ST_ASSIGN */
-    Expr *target;   /* lvalue: EX_IDENT or EX_INDEX */
+    Expr *target;   /* lvalue: EX_IDENT, EX_FIELD */
     Expr *value;
     TokKind aop;    /* the compound part or TK_ASSIGN */
 
-    /* ST_RETURN / ST_IF / ST_WHILE */
+    /* ST_RETURN / ST_IF / ST_WHILE / ST_MATCH (scrutinee) */
     Expr *cond;
     Stmt **body; int nbody;  /* block children */
     Stmt *els;               /* ST_IF else-branch or NULL */
+
+    /* ST_MATCH */
+    MatchArm **arms; int narms;
 };
 
 typedef struct {
     const char *name;
     Ty ty;
+    const char *tname;      /* when ty is a struct/enum type */
     Span span;
 } Param;
 
@@ -206,16 +275,19 @@ struct FnDecl {
     const char *name;
     Param *params; int nparams;
     Ty ret;
+    const char *retname;    /* when ret is a struct/enum type */
     bool is_extern;
     Stmt **body; int nbody;
     Span span;
 };
 
-typedef enum { D_FN, D_TIER, D_USE } DeclKind;
+typedef enum { D_FN, D_TIER, D_USE, D_STRUCT, D_ENUM } DeclKind;
 
 struct Decl {
     DeclKind kind;
     FnDecl *fn;
+    StDecl *st;
+    EnDecl *en;
     const char *name;   /* tier name */
     Span span;
 };

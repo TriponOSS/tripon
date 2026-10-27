@@ -1,0 +1,3 @@
+[
+  { "code": "E0202", "kind": "error", "name": "type-mismatch", "file": "tests/cases/check_match_bind.tp", "line": 8, "col": 9, "len": 9, "msg": "variant 'Good' has 1 payload value(s), pattern binds 2", "hint": "one binding per payload value" }
+]

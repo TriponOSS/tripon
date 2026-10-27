@@ -1,0 +1,3 @@
+[
+  { "code": "E0212", "kind": "error", "name": "duplicate-match-arm", "file": "tests/cases/check_match_dup.tp", "line": 7, "col": 9, "len": 1, "msg": "duplicate match arm: 0 already covered", "hint": "remove or reorder the repeated arm; match arms are checked top to bottom" }
+]
