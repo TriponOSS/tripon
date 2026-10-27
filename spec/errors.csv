@@ -1,0 +1,21 @@
+code,severity,message,hint
+E0001,error,unterminated-string,string must close with a double quote on the same error span
+E0002,error,invalid-character,use only ASCII identifiers; check the character set table in spec/tripon.md
+E0003,error,bad-number-literal,valid forms: 123  0x1F  0o17  0b1010  3.14  1e-9
+E0101,error,unexpected-token,see spec/grammar.ebnf for what can legally appear here
+E0102,error,missing-token,fix 2: expected the token named in the message
+E0201,error,unknown-identifier,define it in scope use a module with the correct use decl or check spelling
+E0202,error,type-mismatch,add a cast or fix the operand types; cast() documented in tripon.md
+E0203,error,mutability-required,declared const but reassigned here; switch to let if assignable is intent
+E0204,error,no-null,null and undefined do not exist; use opt (T) for may-be-missing values
+E0205,error,unhandled-result,Result value ignored; spread with ? or match on it explicitly
+E0301,error,tier-violation,feature [X] requires tier N; current tier is M; raise tier on the target or rewrite the call
+E0302,error,tier-not-declared,add a top-of-file use tier <name>; statement to declare the ceiling
+E0501,error,entry-point-missing,define fn main() or run with an explicit entry via ralt run <file>:main
+E0206,error,non-exhaustive-match,match must cover every enum variant or add a deliberate _ arm
+E0207,error,implicit-conversion-denied,no implicit conversions exist; use cast<T>(x) for exact or explicit lossy casts
+E9001,trap,integer-overflow-trap,arithmetic overflow is a defined trap; pass -fast to make + - * wrap two's-complement
+E9002,trap,index-out-of-bounds,indexing is bounds-checked everywhere; slice.len() before indexing
+E0601,warn,unused-binding,naming prefix _x mutes this warning
+E0602,warn,unreachable-code,this line can never execute after an earlier return or match arm
+E0603,warn,shadowing,binding re-shadows an existing name in scope; rename it

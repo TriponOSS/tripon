@@ -1,0 +1,104 @@
+Tripon Grammar v0 — source of truth.
+Scope: Tier 0 (kernel) + Tier 1 (core) syntax. Tier 2/3 grammar is additive and
+must never change v0 productions.
+
+Note: expression grammar is C-family precedence. Bare precedence list at bottom.
+Note: plain EBNF features only (+, *, ?, and grouping) so any agent can parse this.
+
+File = { Declaration } ;
+
+Declaration = TierDecl | UseDecl | FnDecl | StructDecl | EnumDecl | ConstDecl ;
+
+TierDecl = "use" "tier" Ident "tier" ";" ;         (* e.g. use tier std; *)
+
+FnDecl = "fn" Ident "(" [ ParamList ] ")" [ "->" Type ] Block ;
+
+StructDecl = "struct" Ident "{" { Field } "}" ;
+Field = Ident ":" Type ";" ;
+
+EnumDecl = "enum" Ident [ "<" TypeParams ">" ] "{" Variant { "," Variant } [ "," ] "}" ;
+Variant = Ident [ "(" Type { "," Type } ")" ] ;
+
+ConstDecl = "const" Ident ":" Type "=" LiteralExpr ";" ;
+
+ParamList = Param { "," Param } ;
+Param = Ident ":" Type ;
+
+Block = "{" { Statement } "}" ;
+
+Statement = VarDecl | AssignStmt | ReturnStmt | IfStmt | MatchStmt
+          | WhileStmt | ExpressionStmt | Block ;
+
+VarDecl = ( "let" | "const" ) Ident [ ":" Type ] [ "=" Expression ] ";" ;
+AssignStmt = PostfixExpr AssignOp Expression ";" ;
+AssignOp = "=" | "+=" | "-=" | "*=" | "/=" | "%=" ;
+
+ReturnStmt = "return" [ Expression ] ";" ;
+
+IfStmt = "if" Expression Block [ "else" ( IfStmt | Block ) ] ;
+
+WhileStmt = "while" Expression Block ;
+
+MatchStmt = "match" Expression Block ;
+MatchArm = Pattern "->" Expression [ "," ] ;
+Pattern = LiteralExpr | Ident | Ident "::" Ident       (* variant *)
+        | Ident "(" Pattern { "," Pattern } ")"        (* destructure *)
+        | "_" ;
+
+ExpressionStmt = Expression ";" ;
+
+(* ================= Types ================= *)
+
+Type = FnType | SliceType | OptType | ResultType | RefType | AtomType ;
+FnType = "fn" "(" [ TypeList ] ")" [ "->" Type ] ;
+SliceType = "[" "]" Type ;
+OptType = "opt" "<" Type ">" ;          (* no null - was Option *)
+ResultType = "result" "<" Type "," Type ">" ;
+RefType = "&" [ "mut" ] Type ;          (* borrow/plain reference, core ex *)
+AtomType = ArrayType | PathType ;
+ArrayType = "[" Num "]" Type ;          (* fixed array, tier 0 *)
+PathType = Ident [ "::" Ident ] [ "<" TypeList ">" ] ;   (* generics: T2+ *)
+
+TypeList = Type { "," Type } ;
+
+(* ================= Expressions ================= *)
+
+Expression = LogicalOr ;
+(* C-look operators: && and || only, no word aliases *)
+LogicalOr = LogicalAnd { "||" LogicalAnd } ;
+LogicalAnd = Equality { ( "&&" | "and" ) Equality } ;
+Equality = Comparison { ( "==" | "!=" ) Comparison } ;   (* no coercion - typed strict *)
+Comparison = Term { ( "<" | ">" | "<=" | ">=" ) Term } ;
+Term = Factor { ( "+" | "-" ) Factor } ;
+Factor = Power { ( "*" | "/" | "%" ) Power } ;
+Power = Unary { "**" Unary } ;
+Unary = ( "!" | "-" | "&" ) Unary | Spread | Postfix ;
+Spread = Postfix "?" ;                    (* Result/opt unwrap, T1 *)
+Call = UnaryDecl ;
+Postfix = Primary { PostfixOp } ;
+PostfixOp = "." Ident [ "(" [ ArgList ] ")" ] | "(" [ ArgList ] ")" | "[" Expression "]" ;
+Primary = Num | Str | Ident | "(" Expression ")" | BlockLikeFn | Match | StructInit ;
+BlockLikeFn = ParamLike "=>" Expression ;  (* arrow fn, T2 *)
+ParamLike = "(" [ IdentList ] ")" ;
+StructInit = Ident "{" [ FieldInit { "," FieldInit } [ "," ] ] "}" ;
+FieldInit = Ident [ ":" Expression ] ;
+
+ArgList = Expression { "," Expression } ;
+IdentList = Ident { "," Ident } ;
+
+Num = integer-literal | hex | octal | binary | float ;
+Str = double-quoted-with-escapes | raw-single-quoted ;
+
+(* ================= Precedence (high to low) =================
+  ()  [] .        primary/postfix
+  **              power
+  unary ! - &     
+  * / %
+  + -
+  < > <= >=
+  == !=
+  &&
+  ||
+  spread ?        (T1, lowest unary force-pop)
+  = assignments   (statement-level)
+============================================================= *)
