@@ -1,0 +1,18 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: make build/ralt CC=$CC
+      - name: suite
+        run: sh tests/run.sh
+      - name: determinism
+        run: sh tests/determinism.sh
