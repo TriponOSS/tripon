@@ -272,7 +272,7 @@ static void emit_bin(Cg *g, Expr *e) {
     switch (e->op) {
     case TK_EQ:
     case TK_NE: {
-        if (e->lhs->ty == TY_STR) {
+        if (e->lhs->ty == TY_STR || e->lhs->ty == TY_PTR8) {
             if (e->op == TK_EQ) fputs("tp_str_eq(", g->out);
             else fputs("(!tp_str_eq(", g->out);
             emit_expr(g, e->lhs);
@@ -497,7 +497,7 @@ static void emit_expr(Cg *g, Expr *e) {
         break;
     case EX_INDEX: {
         Expr *base = e->base;
-        if (base->ty == TY_STR) {
+        if (base->ty == TY_STR || base->ty == TY_PTR8) {
             fputs("((uint8_t)", g->out);
             emit_expr(g, base);
             fputs("[tp_strbounds_g((int64_t)(", g->out);

@@ -1,0 +1,498 @@
+// selfhost/lexer.tp - P3.0: the Tripon lexer written in Tripon.
+// Bootstrap oracle = `ralt tokens` (ralt/src/lex.c, frozen behavior):
+//   "TK_NAME line col[ text]" per token, TK_EOF last; ident/str carry text
+//   (str text = RESOLVED bytes, oracle-escaped on output).
+// Lexes its own source when fed TP_SRC="$(cat selfhost/lexer.tp)".
+use tier core;
+
+extern "C" {
+    fn getenv(name: str) -> *i8;
+    fn putchar(c: i32) -> i32;
+}
+
+// ---------------- byte helpers ----------------
+
+// byte at index i, 0 when out of range (EOF sentinel mirrors C peek())
+fn at(s: str, i: i32, n: i32) -> i32 {
+    if i < 0 || i >= n {
+        return 0;
+    }
+    return cast<i32>(s[i]);
+}
+
+fn is_digit(c: i32) -> bool {
+    return c >= 48 && c <= 57;
+}
+
+fn is_alpha_u(c: i32) -> bool {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95;
+}
+
+fn is_ident(c: i32) -> bool {
+    return is_alpha_u(c) || is_digit(c);
+}
+
+fn is_hex(c: i32) -> bool {
+    return is_digit(c) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
+}
+
+// ---------------- output helpers ----------------
+
+// non-negative decimal, recursive
+fn put_i32(v: i32) -> () {
+    if v >= 10 {
+        put_i32(v / 10);
+    }
+    putchar(48 + v % 10);
+    return;
+}
+
+// oracle escaping: \n \t \r \\ \" two chars, otherwise \xNN lowercase hex
+fn put_escaped(b: i32) -> () {
+    if b == 10 {
+        print_str("\\n");
+        return;
+    }
+    if b == 9 {
+        print_str("\\t");
+        return;
+    }
+    if b == 13 {
+        print_str("\\r");
+        return;
+    }
+    if b == 92 {
+        print_str("\\\\");
+        return;
+    }
+    if b == 34 {
+        print_str("\\\"");
+        return;
+    }
+    if b >= 32 && b < 127 {
+        putchar(b);
+        return;
+    }
+    let h = b / 16;
+    let l = b % 16;
+    print_str("\\x");
+    if h < 10 {
+        putchar(48 + h);
+    } else {
+        putchar(87 + h);
+    }
+    if l < 10 {
+        putchar(48 + l);
+    } else {
+        putchar(87 + l);
+    }
+    return;
+}
+
+// bare line: "KIND line col\n" (no trailing space, byte-identical to oracle)
+fn emit_bare(k: str, sl: i32, sc: i32) -> () {
+    print_str(k);
+    putchar(32);
+    put_i32(sl);
+    putchar(32);
+    put_i32(sc);
+    putchar(10);
+    return;
+}
+
+// ---------------- keywords (ralt/src/lex.c KEYWORDS order) ----------------
+
+fn kw_at(src: str, st: i32, ln: i32, n: i32, lit: str) -> bool {
+    if ln != len(lit) {
+        return false;
+    }
+    let i = 0;
+    while i < ln {
+        if at(src, st + i, n) != cast<i32>(lit[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// TK-kind ordinal 1..18; 0 = plain ident
+fn kw_kind(src: str, st: i32, m: i32, n: i32) -> i32 {
+    if kw_at(src, st, m, n, "fn") { return 1; }
+    if kw_at(src, st, m, n, "let") { return 2; }
+    if kw_at(src, st, m, n, "const") { return 3; }
+    if kw_at(src, st, m, n, "return") { return 4; }
+    if kw_at(src, st, m, n, "if") { return 5; }
+    if kw_at(src, st, m, n, "else") { return 6; }
+    if kw_at(src, st, m, n, "while") { return 7; }
+    if kw_at(src, st, m, n, "match") { return 8; }
+    if kw_at(src, st, m, n, "struct") { return 9; }
+    if kw_at(src, st, m, n, "enum") { return 10; }
+    if kw_at(src, st, m, n, "use") { return 11; }
+    if kw_at(src, st, m, n, "tier") { return 12; }
+    if kw_at(src, st, m, n, "extern") { return 13; }
+    if kw_at(src, st, m, n, "true") { return 14; }
+    if kw_at(src, st, m, n, "false") { return 15; }
+    if kw_at(src, st, m, n, "mut") { return 16; }
+    if kw_at(src, st, m, n, "pub") { return 17; }
+    if kw_at(src, st, m, n, "cast") { return 18; }
+    return 0;
+}
+
+fn put_kw_name(k: i32) -> () {
+    if k == 1 { print_str("TK_FN"); return; }
+    if k == 2 { print_str("TK_LET"); return; }
+    if k == 3 { print_str("TK_CONST"); return; }
+    if k == 4 { print_str("TK_RETURN"); return; }
+    if k == 5 { print_str("TK_IF"); return; }
+    if k == 6 { print_str("TK_ELSE"); return; }
+    if k == 7 { print_str("TK_WHILE"); return; }
+    if k == 8 { print_str("TK_MATCH"); return; }
+    if k == 9 { print_str("TK_STRUCT"); return; }
+    if k == 10 { print_str("TK_ENUM"); return; }
+    if k == 11 { print_str("TK_USE"); return; }
+    if k == 12 { print_str("TK_TIER"); return; }
+    if k == 13 { print_str("TK_EXTERN"); return; }
+    if k == 14 { print_str("TK_TRUE"); return; }
+    if k == 15 { print_str("TK_FALSE"); return; }
+    if k == 16 { print_str("TK_MUT"); return; }
+    if k == 17 { print_str("TK_PUB"); return; }
+    if k == 18 { print_str("TK_CAST"); return; }
+    print_str("TK_IDENT");
+    return;
+}
+
+// ---------------- string body emission (resolved text walk) ----------------
+
+// resolve escape sequences from `from` up to (not incl) `to`, print escaped
+fn put_str_body(src: str, from: i32, to: i32, n: i32) -> () {
+    let j = from;
+    let go = true;
+    while go {
+        go = false;
+        if j < to {
+            let ch = at(src, j, n);
+            if ch == 34 || ch == 10 {
+                // terminators carry no resolved bytes
+            } else if ch == 92 {
+                let e = at(src, j + 1, n);
+                if e == 0 {
+                    // trailing backslash at EOF: C resolves it to a NUL byte
+                    put_escaped(0);
+                } else {
+                    let out = e;
+                    if e == 110 { out = 10; }
+                    else if e == 116 { out = 9; }
+                    else if e == 114 { out = 13; }
+                    else if e == 48 { out = 0; }
+                    else if e == 92 { out = 92; }
+                    else if e == 34 { out = 34; }
+                    // unknown escapes resolve to the raw char (C: out = e)
+                    put_escaped(out);
+                    j = j + 2;
+                    go = true;
+                }
+            } else {
+                put_escaped(ch);
+                j = j + 1;
+                go = true;
+            }
+        }
+    }
+    return;
+}
+
+// ---------------- main ----------------
+
+fn main() -> i32 {
+    let src = getenv("TP_SRC");
+    let n = len(src);
+    if n == 0 {
+        return 1;
+    }
+    let pos = 0;
+    let line = 1;
+    let col = 1;
+
+    // shebang: only a leading `#!` is skipped (mirrors lex.c)
+    if n >= 2 && at(src, 0, n) == 35 && at(src, 1, n) == 33 {
+        while pos < n && at(src, pos, n) != 10 {
+            pos = pos + 1;
+            col = col + 1;
+        }
+    }
+
+    let running = true;
+    while running {
+        // ----- whitespace + comments (lex.c skip_ws_comments) -----
+        let skipping = true;
+        while skipping {
+            skipping = false;
+            if pos < n {
+                let c = at(src, pos, n);
+                if c == 32 || c == 9 || c == 13 {
+                    pos = pos + 1;
+                    col = col + 1;
+                    skipping = true;
+                } else if c == 10 {
+                    pos = pos + 1;
+                    line = line + 1;
+                    col = 1;
+                    skipping = true;
+                } else if c == 47 && at(src, pos + 1, n) == 47 {
+                    while pos < n && at(src, pos, n) != 10 {
+                        pos = pos + 1;
+                        col = col + 1;
+                    }
+                    skipping = true;
+                } else if c == 47 && at(src, pos + 1, n) == 42 {
+                    pos = pos + 2;
+                    col = col + 2;
+                    let in_block = true;
+                    while in_block {
+                        in_block = false;
+                        if pos < n {
+                            let bc = at(src, pos, n);
+                            if bc == 42 && at(src, pos + 1, n) == 47 {
+                                pos = pos + 2;
+                                col = col + 2;
+                            } else {
+                                if bc == 10 {
+                                    line = line + 1;
+                                    col = 1;
+                                } else {
+                                    col = col + 1;
+                                }
+                                pos = pos + 1;
+                                in_block = true;
+                            }
+                        }
+                    }
+                    skipping = true;
+                }
+            }
+        }
+
+        if pos >= n {
+            running = false;
+        } else {
+            let c = at(src, pos, n);
+            let sl = line;
+            let sc = col;
+
+            if is_alpha_u(c) {
+                // ----- ident / keyword -----
+                let st = pos;
+                while pos < n && is_ident(at(src, pos, n)) {
+                    pos = pos + 1;
+                    col = col + 1;
+                }
+                let m = pos - st;
+                let k = kw_kind(src, st, m, n);
+                if k > 0 {
+                    put_kw_name(k);
+                    putchar(32);
+                    put_i32(sl);
+                    putchar(32);
+                    put_i32(sc);
+                    putchar(10);
+                } else {
+                    print_str("TK_IDENT");
+                    putchar(32);
+                    put_i32(sl);
+                    putchar(32);
+                    put_i32(sc);
+                    putchar(32);
+                    let i = 0;
+                    while i < m {
+                        put_escaped(at(src, st + i, n));
+                        i = i + 1;
+                    }
+                    putchar(10);
+                }
+            } else if is_digit(c) {
+                // ----- numbers, byte-identical to lex.c lex_number -----
+                let pfx = at(src, pos + 1, n);
+                if c == 48 && (pfx == 120 || pfx == 111 || pfx == 98) {
+                    // 0x/0o/0b branch
+                    let base = 10;
+                    if pfx == 120 { base = 16; }
+                    if pfx == 111 { base = 8; }
+                    pos = pos + 2;
+                    col = col + 2;
+                    let go = true;
+                    while go {
+                        go = false;
+                        if pos < n {
+                            let d = at(src, pos, n);
+                            let ok = false;
+                            if d == 95 {
+                                ok = true;
+                            } else if base == 16 {
+                                ok = is_hex(d);
+                            } else if base == 8 {
+                                ok = d >= 48 && d <= 55;
+                            } else {
+                                ok = d == 48 || d == 49;
+                            }
+                            if ok {
+                                pos = pos + 1;
+                                col = col + 1;
+                                go = true;
+                            }
+                        }
+                    }
+                    emit_bare("TK_INT", sl, sc);
+                } else {
+                    // decimal / float branch
+                    let go = true;
+                    while go {
+                        go = false;
+                        if pos < n {
+                            let d = at(src, pos, n);
+                            if is_digit(d) || d == 95 {
+                                pos = pos + 1;
+                                col = col + 1;
+                                go = true;
+                            }
+                        }
+                    }
+                    let is_float = false;
+                    if at(src, pos, n) == 46 && is_digit(at(src, pos + 1, n)) {
+                        is_float = true;
+                        pos = pos + 1;
+                        col = col + 1;
+                        let go2 = true;
+                        while go2 {
+                            go2 = false;
+                            if pos < n {
+                                let d = at(src, pos, n);
+                                if is_digit(d) || d == 95 {
+                                    pos = pos + 1;
+                                    col = col + 1;
+                                    go2 = true;
+                                }
+                            }
+                        }
+                    }
+                    let ep = at(src, pos, n);
+                    let e1 = at(src, pos + 1, n);
+                    let e2 = at(src, pos + 2, n);
+                    if (ep == 101 || ep == 69) && (is_digit(e1) || ((e1 == 43 || e1 == 45) && is_digit(e2))) {
+                        is_float = true;
+                        pos = pos + 1;
+                        col = col + 1;
+                        if e1 == 43 || e1 == 45 {
+                            pos = pos + 1;
+                            col = col + 1;
+                        }
+                        let go3 = true;
+                        while go3 {
+                            go3 = false;
+                            if pos < n && is_digit(at(src, pos, n)) {
+                                pos = pos + 1;
+                                col = col + 1;
+                                go3 = true;
+                            }
+                        }
+                    }
+                    if is_float {
+                        emit_bare("TK_FLOAT", sl, sc);
+                    } else {
+                        emit_bare("TK_INT", sl, sc);
+                    }
+                }
+            } else if c == 34 {
+                // ----- strings: scan extent, then emit resolved bytes -----
+                let st = pos;
+                pos = pos + 1;
+                col = col + 1;
+                // scanning loop: consumes the source region like lex_string
+                let scanning = true;
+                while scanning {
+                    scanning = false;
+                    if pos < n {
+                        let s2 = at(src, pos, n);
+                        if s2 == 34 {
+                            pos = pos + 1;
+                            col = col + 1;
+                        } else if s2 == 10 {
+                            // newline ends the scan, stays in the stream
+                        } else if s2 == 92 {
+                            // C advances twice unless the escape char is EOF
+                            if at(src, pos + 1, n) == 0 {
+                                pos = pos + 1;
+                                col = col + 1;
+                            } else {
+                                pos = pos + 2;
+                                col = col + 2;
+                            }
+                            scanning = true;
+                        } else {
+                            pos = pos + 1;
+                            col = col + 1;
+                            scanning = true;
+                        }
+                    }
+                }
+                print_str("TK_STR");
+                putchar(32);
+                put_i32(sl);
+                putchar(32);
+                put_i32(sc);
+                putchar(32);
+                put_str_body(src, st + 1, pos, n);
+                putchar(10);
+            } else {
+                // ----- operators, exactly OPS order from lex.c -----
+                let c1 = at(src, pos + 1, n);
+                let hit = false;
+                if c == 58 && c1 == 58 { emit_bare("TK_COLON2", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 45 && c1 == 62 { emit_bare("TK_ARROW", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 61 && c1 == 62 { emit_bare("TK_FATARROW", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 43 && c1 == 61 { emit_bare("TK_ADDEQ", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 45 && c1 == 61 { emit_bare("TK_SUBEQ", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 42 && c1 == 61 { emit_bare("TK_MULEQ", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 47 && c1 == 61 { emit_bare("TK_DIVEQ", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 37 && c1 == 61 { emit_bare("TK_MODEQ", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 61 && c1 == 61 { emit_bare("TK_EQ", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 33 && c1 == 61 { emit_bare("TK_NE", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 60 && c1 == 61 { emit_bare("TK_LE", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 62 && c1 == 61 { emit_bare("TK_GE", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 38 && c1 == 38 { emit_bare("TK_AND", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                if !hit && c == 124 && c1 == 124 { emit_bare("TK_OR", sl, sc); hit = true; pos = pos + 2; col = col + 2; }
+                // singles in OPS order; `**` sits after all singles in lex.c,
+                // so a `*` single always wins: the port mirrors that exactly
+                if !hit && c == 40 { emit_bare("TK_LP", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 41 { emit_bare("TK_RP", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 91 { emit_bare("TK_LB", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 93 { emit_bare("TK_RB", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 123 { emit_bare("TK_BRACE_L", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 125 { emit_bare("TK_BRACE_R", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 44 { emit_bare("TK_COMMA", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 59 { emit_bare("TK_SEMI", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 58 { emit_bare("TK_COLON", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 46 { emit_bare("TK_DOT", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 61 { emit_bare("TK_ASSIGN", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 60 { emit_bare("TK_LT", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 62 { emit_bare("TK_GT", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 33 { emit_bare("TK_NOT", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 43 { emit_bare("TK_PLUS", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 45 { emit_bare("TK_MINUS", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 42 { emit_bare("TK_STAR", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 47 { emit_bare("TK_SLASH", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 37 { emit_bare("TK_PERCENT", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 38 { emit_bare("TK_AMP", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit && c == 63 { emit_bare("TK_QUESTION", sl, sc); hit = true; pos = pos + 1; col = col + 1; }
+                if !hit {
+                    // unknown char: C diags + skips; stdout gets nothing
+                    pos = pos + 1;
+                    col = col + 1;
+                }
+            }
+        }
+    }
+
+    emit_bare("TK_EOF", line, col);
+    return 0;
+}

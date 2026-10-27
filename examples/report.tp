@@ -1,0 +1,19 @@
+// Tripon report - the status update, written in the language it describes.
+fn report(line: str) -> () {
+    print_str(line);
+    return;
+}
+
+fn main() -> i32 {
+    report("== Tripon report (ralt) ==");
+    report("shipped: fmt, doc, lsp, deps (P2)");
+    report("shipped: structs, enums, match, cast<T> (P1.1)");
+    report("shipped: opt/result + ? spread + null (P1.1b)");
+    report("shipped: fixed arrays, str index, E9002 (P1.2)");
+    report("shipped: *i8 raw pointers for extern islands (T7 fence)");
+    report("shipped: ralt tokens oracle - frozen for the selfhost port");
+    report("suite: 41 checks passing, gcc + clang, deterministic");
+    report("in flight: selfhost P3.0 - bootstrapped lexer in Tripon");
+    report("next: lexer port diff-clean vs oracle, then selfhost.sh");
+    return 0;
+}

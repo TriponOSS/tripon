@@ -337,6 +337,12 @@ static bool ty_same(Ty a, const char *an, Ty b, const char *bn) {
     return true;
 }
 
+/* the extern "C" fence (T7) is the one place pointer/text types meet:
+ * *i8 char* values pass into str positions and literals pass into *i8 */
+static bool ty_fence_ok(Ty a, Ty b) {
+    return (a == TY_PTR8 && b == TY_STR) || (a == TY_STR && b == TY_PTR8);
+}
+
 /* ---------------- expression typing ---------------- */
 
 /* numeric literals are untyped-until-context: in bin ops and assigns they
@@ -552,7 +558,7 @@ static Ty tc_expr(Ctx *c, Expr *e) {
                 e->ival = ai ? ai->len : 0;
                 return e->ty;
             }
-            if (at == TY_STR) { e->ty = TY_I32; return e->ty; }
+            if (at == TY_STR || at == TY_PTR8) { e->ty = TY_I32; return e->ty; }
             if (at != TY_UNSET) {
                 char msg[220];
                 snprintf(msg, sizeof msg, "len() takes an array or str, got %s",
@@ -573,7 +579,8 @@ static Ty tc_expr(Ctx *c, Expr *e) {
             } else {
                 Ty at = tc_expr_w(c, e->args[0], barg, NULL);
                 /* no cascades: a deeper-reported arg stops here */
-                if (at != TY_UNSET && !ty_same(at, e->args[0]->tname, barg, NULL)) {
+                if (at != TY_UNSET && !ty_same(at, e->args[0]->tname, barg, NULL) &&
+                !ty_fence_ok(at, barg)) {
                     char msg[240];
                     snprintf(msg, sizeof msg, "builtin '%s' expects %s, got %s",
                              e->callee, ty_name(barg), ty_disp(at, e->args[0]->tname));
@@ -605,7 +612,8 @@ static Ty tc_expr(Ctx *c, Expr *e) {
             Ty at = tc_expr_w(c, e->args[i], fn->params[i].ty, fn->params[i].tname);
             /* no cascades: if the argument already errored deeper, stop here */
             if (at == TY_UNSET || fn->params[i].ty == TY_UNSET) continue;
-            if (!ty_same(at, e->args[i]->tname, fn->params[i].ty, fn->params[i].tname)) {
+            if (!ty_same(at, e->args[i]->tname, fn->params[i].ty, fn->params[i].tname) &&
+                !ty_fence_ok(at, fn->params[i].ty)) {
                 char msg[260];
                 snprintf(msg, sizeof msg, "argument %d of '%s' must be %s, got %s",
                          i + 1, fn->name,
@@ -690,7 +698,8 @@ static Ty tc_expr(Ctx *c, Expr *e) {
         }
 
         if (is_cmp || is_eq) {
-            if (!ty_same(lhs, e->lhs->tname, rhs, e->rhs->tname)) {
+            if (!ty_same(lhs, e->lhs->tname, rhs, e->rhs->tname) &&
+                !ty_fence_ok(lhs, rhs)) {
                 char msg[240];
                 snprintf(msg, sizeof msg, "cannot compare %s with %s; no implicit conversion exists",
                          ty_disp(lhs, e->lhs->tname), ty_disp(rhs, e->rhs->tname));
@@ -700,7 +709,7 @@ static Ty tc_expr(Ctx *c, Expr *e) {
                 return TY_UNSET;
             }
             if (is_eq && !ty_is_num(lhs) && lhs != TY_BOOL) {
-                if (lhs == TY_STR) {
+                if (lhs == TY_STR || lhs == TY_PTR8) {
                     /* str equality: byte-compare semantics, defined */
                     e->ty = TY_BOOL;
                     return TY_BOOL;
@@ -796,7 +805,7 @@ static Ty tc_expr(Ctx *c, Expr *e) {
             e->is_const_ref = e->base->is_const_ref;
             return e->ty;
         }
-        if (bt == TY_STR) {
+        if (bt == TY_STR || bt == TY_PTR8) {
             Ty it = tc_expr(c, e->index);
             if (it != TY_UNSET && !ty_is_int(it)) {
                 char msg[220];
@@ -1069,7 +1078,8 @@ static void tc_stmt(Ctx *c, Stmt *s) {
             c->spread_pos = 1;
             Ty it = tc_expr_w(c, s->init, declared, s->tname);
             c->spread_pos = was;
-            if (!ty_same(it, s->init->tname, declared, s->tname)) {
+            if (!ty_same(it, s->init->tname, declared, s->tname) &&
+                !ty_fence_ok(it, declared)) {
                 char msg[240];
                 snprintf(msg, sizeof msg, "initializer is %s but binding is %s; no implicit conversion exists",
                          it == TY_UNSET ? "unknown" : ty_disp(it, s->init->tname),

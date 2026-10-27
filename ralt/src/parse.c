@@ -9,6 +9,7 @@ typedef struct {
     const char *file;
     int si_ok;      /* struct-init IDENT '{' currently allowed (suppressed in if/while/match conditions) */
     int no_anon;    /* struct fields / enum payloads deny opt/result types in v0 */
+    int allow_ptr;  /* raw *i8 types: extern "C" islands only (spec T7) */
 } Parser;
 
 static Token *peek(Parser *p) { return &p->toks[p->pos]; }
@@ -42,6 +43,22 @@ static Token *expect_token(Parser *p, TokKind k, const char *what) {
  * (TY_TYPEDEF): the typecheck pre-pass resolves it against the decl tables. */
 static Ty parse_type(Parser *p, const char **tname) {
     if (tname) *tname = NULL;
+    /* raw pointer type: *i8 -> char *, extern "C" islands only (spec T7) */
+    if (at(p, TK_STAR)) {
+        Token *star = advance(p);
+        if (!p->allow_ptr) {
+            diag(star->span, E0101, SEV_ERROR,
+                 "raw pointer types live only inside extern \"C\" islands (T7)",
+                 "move this signature into extern \"C\" { ... }, or use str for text");
+        }
+        Token *tn = expect_token(p, TK_IDENT, "the pointee type ('*i8' is available v0)");
+        if (strcmp(tn->text, "i8") == 0) return TY_PTR8;
+        char msg[160];
+        snprintf(msg, sizeof msg, "unsupported pointee '%s': v0 externs take *i8", tn->text);
+        diag(tn->span, E0101, SEV_ERROR, msg,
+             "*i8 maps to plain char*; more pointee types land with the allocator tier");
+        return TY_PTR8;
+    }
     /* fixed array: "[" Num "]" Type (grammar.ebnf ArrayType). No slice in v0. */
     if (at(p, TK_LB)) {
         Token *lb = advance(p);
@@ -591,6 +608,10 @@ static FnDecl *parse_fn_proto(Parser *p, bool extern_mode) {
     fn->name = name->text;
     fn->span = kw->span;
     expect_token(p, TK_LP, "'(' after fn name");
+    /* raw pointers are an extern-island feature: *i8 allowed while parsing
+     * this signature only */
+    bool saved_ptr = p->allow_ptr != 0;
+    p->allow_ptr = extern_mode;
     while (!at(p, TK_RP) && !at(p, TK_EOF)) {
         Token *pn = expect_token(p, TK_IDENT, "a parameter name");
         expect_token(p, TK_COLON, "':' before the parameter type");
@@ -608,6 +629,7 @@ static FnDecl *parse_fn_proto(Parser *p, bool extern_mode) {
     expect_token(p, TK_RP, "')' to close parameters");
     if (eat(p, TK_ARROW)) fn->ret = parse_type(p, &fn->retname);
     else fn->ret = TY_VOID;
+    p->allow_ptr = saved_ptr;
     fn->is_extern = extern_mode;
     return fn;
 }

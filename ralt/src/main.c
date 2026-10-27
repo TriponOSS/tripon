@@ -258,6 +258,37 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    if (strcmp(cmd, "tokens") == 0) {
+        size_t len;
+        char *src = read_all(file, &len);
+        if (!src) {
+            fprintf(stderr, "ralt: cannot read %s\n", file);
+            return 1;
+        }
+        int ntoks;
+        Token *toks = lex_file(a, src, len, file, &ntoks);
+        for (int i = 0; i < ntoks; i++) {
+            Token *t = &toks[i];
+            printf("%s %d %d", tok_name(t->kind), t->span.line, t->span.col);
+            if (t->text && (t->kind == TK_IDENT || t->kind == TK_INT ||
+                            t->kind == TK_FLOAT || t->kind == TK_STR)) {
+                fputc(' ', stdout);
+                for (size_t k = 0; k < t->len; k++) {
+                    unsigned char ch = (unsigned char)t->text[k];
+                    if (ch == '\n') fputs("\\n", stdout);
+                    else if (ch == '\t') fputs("\\t", stdout);
+                    else if (ch == '\r') fputs("\\r", stdout);
+                    else if (ch == '\\') fputs("\\\\", stdout);
+                    else if (ch == '"') fputs("\\\"", stdout);
+                    else if (ch >= 32 && ch < 127) fputc(ch, stdout);
+                    else printf("\\x%02x", ch);
+                }
+            }
+            fputc('\n', stdout);
+        }
+        return g_nerrors > 0 ? 1 : 0;
+    }
+
     if (strcmp(cmd, "build") == 0 || strcmp(cmd, "run") == 0) {
         int ndecls;
         Decl **decls = analyze_proj(a, file, &ndecls);

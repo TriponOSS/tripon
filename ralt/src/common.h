@@ -142,6 +142,7 @@ typedef enum {
     TY_UNSET,               /* pre-inference */
     TY_OPT, TY_RESULT,      /* opt<T> / result<T,E>; tname = anon enum name */
     TY_ARRAY,               /* fixed array; tname = canonical "[N]T" name */
+    TY_PTR8,                /* raw *i8 -> char *, extern "C" islands only */
 } Ty;
 
 const char *ty_name(Ty t);
@@ -355,5 +356,6 @@ void codegen_file(Arena *a, Decl **decls, int ndecls, const char *outpath, bool 
 void fmt_file(Arena *a, Decl **decls, int ndecls, FILE *out);            /* fmt.c */
 void doc_file(Arena *a, Decl **decls, int ndecls, FILE *out, bool json); /* doc.c */
 void lsp_serve(void);                                                    /* lsp.c */
+const char *tok_name(TokKind k);                                        /* util.c */
 
 #endif
