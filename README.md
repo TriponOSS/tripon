@@ -1,23 +1,105 @@
-# Tripon (.tp)
+# Tripon
 
 ![ci](https://github.com/TriponOSS/tripon/actions/workflows/ci.yml/badge.svg)
 ![license MIT](https://img.shields.io/badge/license-MIT-green)
 ![spec v0](https://img.shields.io/badge/spec-v0.0-blue)
 ![phase](https://img.shields.io/badge/phase-P2%20shipped-orange)
-![suite](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/wiki/TriponOSS/tripon/suite.json)
+![backend](https://img.shields.io/badge/codegen-C99-informational)
 
-Robust, simple compiled language for low-resource systems — and the #1
-AI-agent-friendly programming language.
+**A robust compiled language for low-resource systems — and the most
+AI-agent-friendly one in existence.**
+
+JS-shaped skin. C-speed output. Rust's safety spine, minus the learning
+curve, macros, and null. Everything the toolchain says is machine-readable,
+deterministic, and frozen by tests.
+
+---
+
+## Chapters
+
+- [Why does this exist](#why-does-this-exist)
+- [Quick start](#quick-start)
+- [The language](#the-language)
+  - [Hello Tripon](#hello-tripon)
+  - [Types and inference](#types-and-inference)
+  - [No null, no undefined](#no-null-no-undefined)
+  - [Errors are values](#errors-are-values)
+  - [No UB, by construction](#no-ub-by-construction)
+  - [No implicit conversions. Ever.](#no-implicit-conversions-ever)
+  - [Tiers: pick how much runtime you can afford](#tiers-pick-how-much-runtime-you-can-afford)
+  - [Determinism](#determinism)
+- [The toolchain: one binary `ralt`](#the-toolchain-one-binary-ralt)
+- [Dependencies](#dependencies)
+- [Benchmark numbers](#benchmark-numbers)
+- [The agent interface](#the-agent-interface)
+- [Roadmap](#roadmap)
+- [Repo layout](#repo-layout)
+- [Contributing](#contributing)
+- [FAQ](#faq)
+- [License](#license)
+
+---
+
+## Why does this exist
+
+Real constraints produce real languages:
+
+1. **Low-resource systems deserve a good language** — firmware, bootloaders,
+   embedded CLIs, tiny servers. Rust is heavy, C is unsafe, JS/TS doesn't
+   even compile there. Tripon targets that bandwidth: milliseconds builds,
+   KB binaries, zero runtime.
+
+2. **Agents write code all day, so design for that loop.** Agents never
+   get tired or bored: they write code, get structured feedback, and iterate.
+   So `ralt` treats the compiler–agent interface as a first-class product:
+   stable fault codes, spans with free fix hints, one deterministic behavior,
+   no ambiguity where an LLM could guess differently from the same input.
+
+3. **The language humans know the shape of**: the brace/semicolon/`let`/`fn`
+   surface carries zero new-keyword retraining. Type-safety without exotic
+   syntax. One grammar file with no macros, no overloading, no feature soup.
+
+Tripon is compiled to C99 today (targeting a native backend thereafter); any
+C toolchain can consume its output, including tiny compilers like tcc.
+
+---
+
+## Quick start
+
+Requirements: git, any C99 toolchain (gcc/clang, otherwise nothing). Browse:
+
+```sh
+git clone https://github.com/TriponOSS/tripon
+cd tripon
+make                    # makes build/ralt — one static binary, zero deps
+make test               # 18 tests, GCC- and clang-green
+```
+
+Run programs:
+
+```sh
+./build/ralt run examples/hello.tp
+./build/ralt check examples/fib.tp --json   # the full diagnostic contract
+```
+
+---
+
+## The language
+
+Extension `.tp`. Comments are `//` and `/* */`. Semicolons and braces are
+mandatory: a whole language where nothing hides.
+
+### Hello Tripon
 
 ```tripon
-use tier core;
+use tier core;              // tier ceiling, section below
 
 extern "C" { fn puts(p: str) -> i32; }
 
 fn fib(n: i32) -> i32 {
     let a: i32 = 0;
     let b: i32 = 1;
-    let i = 0;
+    let i = 0;              // inferred i32
     while i < n {
         let t = a + b;
         a = b;
@@ -28,86 +110,248 @@ fn fib(n: i32) -> i32 {
 }
 
 fn main() -> i32 {
-    print_i32(fib(20));
+    print_i32(fib(20));     // 6765
+    puts("done");
     return 0;
 }
 ```
 
-## Why
+### Types and inference
 
-C gives you UB, JavaScript gives you `{}`, Rust gives you a PhD. Tripon keeps
-the safe core and the brace-shaped skin an LLM already knows, then optimizes
-the loop where an agent writes/debugs code:
+`i8` `i16` `i32` `i64` `u8`...`usize` `isize` `f32` `f64` `bool` `str` `void`.
+Signatures are explicit, locals infer, everything is checked before your code
+reaches runtime. There is no `var` and there is no dynamic anything: what is
+declared is what runs.
 
-| Agent-need | Tripon answer |
+### No null, no undefined
+
+Null-pointer bugs and "undefined is not a function" are unrepresentable.
+May-be-missing values are values:
+
+```tripon
+let maybe = lookup(key);        // opt<i32>, two variants: some(v), none
+match maybe {
+    lookup::some(v) => { print_i32(v); }
+    lookup::none    => { /* explicit */ }
+}
+```
+
+Passing `null` somewhere = E0204 at compile time:
+```
+E0204 no-null: null and undefined do not exist; use opt (T) for may-be-missing values
+```
+
+### Errors are values
+
+No exceptions, no unwinding, no stack traces that end in tragedy.
+
+```tripon
+let res = parse(s);     // result<T, E> = ok(v) | err(e)
+let v = res?;           // ? propagates the error to the caller. forced handling
+```
+
+Ignoring a result of type result = compile error E0205. By design.
+
+### No UB, by construction
+
+The no-UB contract is not documentation folklore — the compiler wires it:
+
+| the classic | in Tripon | outcome |
+|---|---|---|
+| int overflow | traps (exit 101, E9001), or wraps with `-fast` | defined, always |
+| `/` and `%` by zero | trap E9003 | defined, always |
+| OOB index | bounds-checked, trap E9002 | defined, always |
+| uninitialized read | locals are zero-initialized | defined, always |
+
+```
+tripon trap E9001 integer-overflow-trap main.tp:7
+```
+
+One line, code, file, span. Every trap.
+
+### No implicit conversions. Ever.
+
+`i32 + f64` doesn't silently demote or promote; it stops your build:
+
+```
+E0202 type-mismatch: add a cast or fix the operand types; cast() documented in tripon.md
+```
+
+Conversions are explicit and honest: `cast<i64>(x)` widens, `cast<i32>(y)`
+truncates, `cast<f64>(z)` makes a float. T2 in `spec/tripon.md` — the whole
+type-safety contract — is non-negotiable.
+
+### Tiers: pick how much runtime you can afford
+
+Firmware ≠ CLI app ≠ web server. Tripon is additive by design:
+
+| tier | gets | target |
+|---|---|---|
+| `kernel` | ints, bools, structs, enums, fn, fixed arrays, extern C, `const` | bare metal: no alloc, no runtime |
+| `core` | + arena, slices, `result`/`opt`/`?`, `match`, modules | microcontrollers, tiny CLIs (default for scripts) |
+| `std` | + ref intimacy, String/Vec/Map, closures, generics | normal apps |
+| `full` | + coroutines/async, self-host runtime | everything else |
+
+`use tier std;` declares your file's ceiling. A missing feature on your tier is
+hard error E0301 — never "kinda works, probably".
+The tier ladder is enforced per-file: a stdlib `use` raises requirements via
+the manifest of the `use`d module. And nothing silently degrades.
+
+### Determinism
+
+Same source, byte-identical compiled output, every build, tested by CI
+(`tests/determinism.sh`). No random ordering. No "works on my machine" drift.
+Compilers are personal only to theirs humans; Tripon's is not.
+
+---
+
+## The toolchain: one binary ralt
+
+| command | what it does |
 |---|---|
-| "what exactly is wrong" | `ralt check --json` → `{code,name,file,line,col,len,msg,hint}`. Codes frozen forever (`E0202` is never renumbered), full table in [`spec/errors.csv`](spec/errors.csv). |
-| "what does this program mean" | one grammar file: [`spec/grammar.ebnf`](spec/grammar.ebnf), LL-ish, no macros, no overloading. |
-| "same input, same output" | deterministic: same source → byte-identical C, tested every commit. |
-| "fix it now, not after a build" | spans + hints direct in the JSON, `ralt explain E0202` expands any code. |
-| "compile it all instantly" | `ralt` is one dep-free C99 binary; default build is optimizer-free (ms-brisk) |
+| `ralt build <file.tp>` [-o out] [-O fast] [-fast] | emit C99 → cc pipeline → executable (or `-O fast` optim passes) |
+| `ralt run <file.tp> [args...]` | build + execute in one ms |
+| `ralt check <file.tp> [--json]` | full typecheck, human or machine format |
+| `ralt emit --c <file.tp>` | stop after codegen, emit the .c |
+| `ralt explain <code>` | any error code expanded, e.g. `E0202` |
+| `ralt init` | scaffold `ralt.yaml` |
+| `ralt install <name\|url\|dir>` | resolve/refresh a dependency |
+| `ralt deps` | list collected dep sources |
+| `ralt fmt <file.tp>` | canonical layout — agents can show diffs instead of guessing |
+| `ralt doc <file.tp> [--json]` | signatures of every `fn` (text or JSON) |
+| `ralt lsp` | editor/agent server over stdio |
 
-## Language pillars
+Typical agent loop (real demo):
 
-- **Type-safe JS-style syntax** — braces with braces, `let`/`const`, `fn`, mandatory semicolons, `==` only within the same type.
-- **No null, no undefined** — `opt<T>` and `result<T, E>` as explicit value types; `?` propagates. Forgetting cases = compile error (E0205), not runtime.
-- **No UB** — integer overflow traps E9001 by default (`-fast` = wrap), `/` and `%` by `0` traps E9002, out-of-bounds traps E9003, uninitialized values are `0`.
-- **No implicit conversions, forever** — `i32` + `f64` is E0202, not a shrug; keep `cast<T>()`.
-- **Explicit tiering** — `use tier kernel|core|std|full` per file: `kernel` is bare-metal-ready (no alloc, no runtime); unsupported features produce hard errors (E0501), never silent degradation.
-- **Errors as values** — no exceptions, no unwinding.
-- **Fast builds** — single translation-unit C99 out; `-O fast` adds opt passes (niche packing for `result<T,E>`: zero runtime overhead).
+```sh
+$ ralt check main.tp --json
+{"code":"E0202","kind":"error","name":"type-mismatch","file":"main.tp",
+ "line":7,"col":11,"len":5,"msg":"i32 vs f64","hint":"add a cast or fix the operand types"}
 
-## ralt — the one tool
-
-```
-ralt build <file.tp> [-o out]  [-O fast] [-fast]
-ralt run   <file.tp> [args...]
-ralt check <file.tp> [--json]
-ralt emit  --c file.tp -o out.c
-ralt explain <code>            e.g. E0202
-ralt init                      scaffold ./ralt.yaml
-ralt install <name|url|dir>    dependency into ~/.ralt/deps
-ralt deps                      list collected dep sources
-ralt fmt <file.tp>             canonical, agent-diffable layout
-ralt doc <file.tp> [--json]
-ralt lsp                       editor/agent protocol (over stdio)
+# agent edits main.tp:7, retries:
+$ ralt check main.tp --json
+[]
 ```
 
-**Install:** `git clone https://github.com/TriponOSS/tripon && (cd tripon && make)`.
-Requires any C99 toolchain; nothing else — `ralt` is self-hosted even for itself.
+Exit codes: `0` clean, `1` errors, `2` usage. Grammar source:
+[spec/errors.csv](spec/errors.csv) + [spec/grammar.ebnf](spec/grammar.ebnf).
 
-## Deps
+---
+
+## Dependencies
+
+`ralt.yaml` (cargo-like, minimal):
 
 ```yaml
 name: myapp
 version: 0.1.0
 deps:
-  tinser: https://github.com/TriponOSS/tinser   # git url
-  localmath: ./vendor/localmath                 # or local dir
+  tinser:   https://github.com/TriponOSS/tinser    # git url, cached in ~/.ralt/deps
+  localmath: ./vendor/localmath                     # or a plain local dir
 ```
 
-`ralt install localmath` → cache and fold together. Deps compile into the same
-translation unit, so first-order users pay zero link overhead.
+`ralt install tinser` clones and pins into the cache; `ralt deps` lists
+collected sources. Deps compile into the same translation unit: cross-package
+calls inlined, no link ceremony, no dlopen ever.
 
-## Status (see [PLAN.md](PLAN.md))
+---
 
-- [x] P0 — spec: grammar EBNF, language contract, error code table
-- [x] P1.0 — bootstrap compiler in C99: lex/parse/typecheck/C99-codegen, drivers, deps, no-UB traps
-- [x] P2 — agent tooling: fmt, doc, lsp, deps; suite 18/18, determinism-green
-- [ ] P3 — self-host: Tripon lexer/parser/checker written in Tripon ("Tripon made in Tripon")
-- [ ] P4 — native x86-64 backend, drop C dependence, package cache
+## Benchmark numbers
+
+One binary, C99, cold cache ([bench/build_bench.sh](bench/build_bench.sh)
+reproduces on any box):
+
+| pipeline | time |
+|---|---|
+| full build (emit + cc + link) | ~330 ms |
+| `ralt check` (type gates only) | ~18 ms |
+| codegen only (emit .c) | ~9 ms |
+| hello binary (x86-64, dynamic) | ~17 KB |
+
+Startup ≈ instant (static C body), no optimizer by default: `-O fast` opts
+into passes (niche packing for `result<T, E>` = zero overhead) once types
+prove them.
+
+---
+
+## The agent interface
+
+What actually makes Tripon the #1 agent-facing language:
+
+1. **Stable fault vocabulary**: `E####` codes are append-only. `E0202` means
+   the same thing today and in 10 releases. Machine ids never move.
+2. **Exact spans**: every diagnostic carries `{file,line,col,len}` so the only
+   correct edit can be computed — not "somewhere in this file".
+3. **A free fix hint, in JSON**: each diagnostic carries its healer's hint
+   (`spec/errors.csv` row) — agents can act without a doc lookup.
+4. **Determinism**: same input → same output → incremental agents work.
+5. **Everything in one binary** `ralt`: compiler, fmt, doc, LSP, deps, parser
+   — no tool discovery tax.
+6. **The language is simple enough to simulate**: LL-ish grammar, no macros,
+   no overloading, no implicit anything: an agent can decide what the next
+   token must be without a model call.
+
+---
+
+## Roadmap
+
+- [x] **P0 — Spec.** grammar EBNF, language contract, frozen error table
+- [x] **P1.0 — Bootstrap compiler in C99.** lex/parse/typecheck/C99 codegen,
+      drivers, no-UB traps, builtins
+- [x] **P2 — Agent tooling.** fmt/doc/lsp/deps; suite 18, determinism-green
+- [ ] **P3 — Self-host.** lexer/parser/checker ported to Tripon — "Tripon made
+      with Tripon" — bootstrap fails closed until the ported compiler passes
+      its own compilation and the full suite on the golden cases
+- [ ] **P4 — Native x86-64 backend.** drop the C dependence; linear-scan
+      register allocation, no SSA issuance overhead
+- [ ] Ideation: package cache with content addressing, tier linter
+
+Phase detail lives in [PLAN.md](PLAN.md).
+
+---
 
 ## Repo layout
 
 ```
-spec/        grammar.ebnf, tripon.md, errors.csv — the language contract
-ralt/src/    the bootstrap compiler (C99, zero deps)
+spec/        grammar.ebnf  tripon.md  errors.csv   ← the language contract (frozen)
+ralt/src/    the bootstrap compiler: 1 new C file per pass, zero deps
 stdlib/      tier-managed standard library (grows with P1.2)
-examples/    runnable .tp samples
-tests/       frozen contract suite + determinism + bench
+examples/    runnable .tp programs (hello, fib, ...)
+tests/       frozen contract: cases + goldens + determinism + deps smoke
+bench/       builder benchmarks → README numbers
 ```
 
-Contrib: `make` builds, `make test` runs the frozen suite (must be green under
-`gcc` and `clang` together), error codes append-only per `spec/errors.csv`.
+## Contributing
 
-MIT. Project view: PRs to [`TriponOSS/tripon`](https://github.com/TriponOSS/tripon).
+- Read [spec/tripon.md](spec/tripon.md) + [grammar.ebnf](spec/grammar.ebnf) first;
+  they are the source of truth, not the C code.
+- Error codes are append-only: never renumber, never reuse; update
+  `spec/errors.csv` + matching JSON goldens in `tests/expected/`.
+- Every PR must keep `make test` and `sh tests/determinism.sh` green under
+  **gcc AND clang**; CI enforces it on the matrix in
+  [.github/workflows/ci.yml](.github/workflows/ci.yml).
+- Changed spec semantics? Change the spec first, then the code, then the tests.
+
+## FAQ
+
+**Why compile to C99?** Portability + free optimization from real C compilers,
+and lets tcc-class builders take the output today. Native backend comes in P4.
+
+**Is Tripon `undefined behavior anywhere?`** No — see [No UB, by
+construction](#no-ub-by-construction).
+
+**Why no `null`?** It's the billion-dollar mistake and agents write it from
+ten thousands of docs. `opt<T>` + match + `?` is the cheap sound replacement
+in all magnitudes of compile-time checks.
+
+**GC?** None. Arenas for hot paths, explicit ownership for long-lived state;
+`kernel` tier has no allocator at all, so malloc can't even exist there.
+
+**Tier system vs Zig comptime?** Comptime mixes evaluation into compile
+indeterminably; Tripon frowns on "surprise capabilities". Tiers are declared,
+layered, and the availability surface is a checked fact (E0301), not vibes.
+
+## License
+
+MIT — [LICENSE](LICENSE). Repository:
+[TriponOSS/tripon](https://github.com/TriponOSS/tripon).
