@@ -31,6 +31,7 @@ static const struct { const char *op; TokKind k; } OPS[] = {
     {"=", TK_ASSIGN}, {"<", TK_LT}, {">", TK_GT},
     {"!", TK_NOT}, {"+", TK_PLUS}, {"-", TK_MINUS}, {"*", TK_STAR},
     {"/", TK_SLASH}, {"%", TK_PERCENT}, {"&", TK_AMP}, {"?", TK_QUESTION},
+    {"**", TK_POW},
 };
 
 static void push_tok(Lexer *lx, Token t) {
@@ -95,14 +96,21 @@ static void skip_ws_comments(Lexer *lx) {
     }
 }
 
-static TokKind lex_ident(Lexer *lx) {
+static void lex_ident(Lexer *lx) {
     size_t start = lx->pos;
     Span sp = here(lx);
     while (lx->pos < lx->len && ident_char(peek(lx))) adv(lx);
     size_t n = lx->pos - start;
     for (size_t i = 0; i < sizeof KEYWORDS / sizeof KEYWORDS[0]; i++) {
-        if (strlen(KEYWORDS[i].kw) == n && memcmp(KEYWORDS[i].kw, lx->src + start, n) == 0)
-            return KEYWORDS[i].k;
+        if (strlen(KEYWORDS[i].kw) == n && memcmp(KEYWORDS[i].kw, lx->src + start, n) == 0) {
+            Token t;
+            memset(&t, 0, sizeof t);
+            t.kind = KEYWORDS[i].k;
+            t.span = sp;
+            t.span.len = (int)n;
+            push_tok(lx, t);
+            return;
+        }
     }
     Token t;
     memset(&t, 0, sizeof t);
@@ -112,7 +120,6 @@ static TokKind lex_ident(Lexer *lx) {
     t.text = arena_dupstr(lx->arena, lx->src + start, n);
     t.len = n;
     push_tok(lx, t);
-    return TK_IDENT;
 }
 
 static int digit_val(char c, int base, bool *ok) {
@@ -276,10 +283,10 @@ const char *tok_kind_word(TokKind k) {
         "','", "';'", "':'", "'::'", "'.'", "'->'", "'=>'",
         "'='", "'+='", "'-='", "'*='", "'/='", "'%='",
         "'=='", "'!='", "'<'", "'>'", "'<='", "'>='",
-        "'&&'", "'||'", "'!'", "'+'", "'-'", "'*'", "'/'", "'%'", "'&'", "'?'",
+        "'&&'", "'||'", "'!'", "'+'", "'-'", "'*'", "'/'", "'%'", "'&'", "'?'", "'**'",
     };
     if (k == TK_IDENT) return "identifier";
-    if (k >= TK_EOF && k <= TK_QUESTION && WORDS[k]) return WORDS[k];
+    if (k >= TK_EOF && k <= TK_POW && WORDS[k]) return WORDS[k];
     return "token";
 }
 
@@ -292,6 +299,11 @@ Token *lex_file(Arena *a, const char *src, size_t len, const char *file, int *nt
     lx.line = 1;
     lx.col = 1;
     lx.arena = a;
+
+    /* shebang: a leading #! line is ignored (spec: shebang-friendly) */
+    if (len >= 2 && src[0] == '#' && src[1] == '!') {
+        while (lx.pos < lx.len && peek(&lx) != '\n') adv(&lx);
+    }
 
     for (;;) {
         skip_ws_comments(&lx);

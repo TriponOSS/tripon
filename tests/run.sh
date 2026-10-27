@@ -24,8 +24,12 @@ for src in tests/cases/*.tp; do
 
     # --- check contract ---
     if [ -f "tests/expected/$name.json" ]; then
-        if ! $RALT check --json "$src" > "$OUT/$name.json" 2>>"$OUT/$name.log"; then
-            note "FAIL $name: ralt check crashed"
+        $RALT check --json "$src" > "$OUT/$name.json" 2>>"$OUT/$name.log"
+        rc=$?
+        want_rc=0
+        grep -q '"kind": "error"' "tests/expected/$name.json" && want_rc=1
+        if [ "$rc" -ne "$want_rc" ]; then
+            note "FAIL $name: check exit $rc, wanted $want_rc"
             cat "$OUT/$name.log"
             fail=$((fail + 1)); failed_names="$failed_names $name"; continue
         fi

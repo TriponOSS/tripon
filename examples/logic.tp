@@ -1,0 +1,17 @@
+// examples/logic.tp - no truthiness: conditions are bool, always
+
+use tier core;
+
+fn grade(score: i32) -> str {
+    if score >= 90 { return "A"; }
+    else if score >= 75 { return "B"; }
+    return "C";
+}
+
+fn main() -> i32 {
+    let warm = 23 > 20 && true;
+    if warm { print_str(grade(80)); }
+    let cold = !warm && false;   // bool and bool only, && || !
+    if cold { print_str("never"); }
+    return 0;
+}

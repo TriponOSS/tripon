@@ -11,6 +11,8 @@ static Arena *arena_extend(Arena *cur, size_t n) {
     return a;
 }
 
+Arena *arena_new(void) { return arena_extend(NULL, 0); }
+
 void *arena_alloc(Arena *a, size_t n) {
     n = (n + 15) & ~(size_t)15;
     if (a->used + n > a->cap) {

@@ -23,6 +23,7 @@ typedef struct Arena {
 void *arena_alloc(Arena *a, size_t n);
 void *arena_zalloc(Arena *a, size_t n);
 char *arena_dupstr(Arena *a, const char *s, size_t len);
+Arena *arena_new(void);
 
 /* ---------------- growable arrays ---------------- */
 
@@ -58,12 +59,7 @@ void diag(Span sp, int code, Sev sev, const char *msg, const char *hint);
 void print_diags(bool json);
 
 bool is_c_reserved(const char *s);                   /* codegen.c */
-const char *tok_kind_word(TokKind k);                /* lex.c */
 void diag_expected(Span sp, const char *what, const char *got); /* util.c */
-
-/* typed vec aliases (VecPtr machinery reused) */
-
-/* lex helpers used by parse.c tables too */
 
 /* codes - keep in sync with spec/errors.csv; never renumber */
 #define E0001 1
@@ -108,7 +104,7 @@ typedef enum {
     TK_ASSIGN, TK_ADDEQ, TK_SUBEQ, TK_MULEQ, TK_DIVEQ, TK_MODEQ,
     TK_EQ, TK_NE, TK_LT, TK_GT, TK_LE, TK_GE,
     TK_AND, TK_OR, TK_NOT, TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH,
-    TK_PERCENT, TK_AMP, TK_QUESTION, TK_STARPTR /* "*" reused */,
+    TK_PERCENT, TK_AMP, TK_QUESTION, TK_POW,
 } TokKind;
 
 typedef struct {
@@ -153,7 +149,7 @@ struct Expr {
     ExKind kind;
     Span span;
     Ty ty;
-    bool lvalue;
+    bool lvalue, is_const_ref;
 
     long long ival;         /* EX_INT */
     double fval;            /* EX_FLOAT */
@@ -218,6 +214,32 @@ struct Decl {
 };
 
 /* ---------------- pipeline ---------------- */
+
+const char *tok_kind_word(TokKind k);                /* lex.c */
+
+/* typed vec struct aliases (VecPtr machinery reused, built on arena) */
+typedef struct VecStmt { Stmt **data; int len, cap; } VecStmt;
+typedef struct VecExpr { Expr **data; int len, cap; } VecExpr;
+typedef struct VecDecl { Decl **data; int len, cap; } VecDecl;
+typedef struct VecFn   { FnDecl **data; int len, cap; } VecFn;
+
+static inline void vec_push_stmt(VecStmt *v, Arena *a, Stmt *s) {
+    (void)a;
+    void **slot;
+    if (v->len == v->cap) {
+        v->cap = v->cap ? v->cap * 2 : 8;
+        /* realloc on heap; arena copies happen at parse exit */
+    }
+    slot = NULL;
+    (void)slot;
+    /* simple ptr-array growth (heap) — arenas own AST nodes, arrays own pointers */
+    if (v->len == v->cap) {
+        Stmt **na = realloc(v->data, (size_t)v->cap * sizeof(Stmt *)); /* cap already updated */
+        if (!na) { fputs("ralt: out of memory\n", stderr); exit(1); }
+        v->data = na;
+    }
+    v->data[v->len++] = s;
+}
 
 Token *lex_file(Arena *a, const char *src, size_t len, const char *file, int *ntoks);
 Decl **parse_file(Arena *a, Token *toks, int ntoks, const char *file);

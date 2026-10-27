@@ -1,0 +1,13 @@
+// examples/strings.tp - str is a utf8 slice literal; len is the prelude builtin
+
+use tier core;
+
+fn main() -> i32 {
+    let s = "tripon";
+    print_i32(len(s));           // 6
+    if s == "tripon" {           // == on str is content equality, machine-checked
+        print_str("exact match");
+    }
+    print_str("tab:\tand \"quotes\"");   // escapes: \n \t \r \0 \\ \"
+    return 0;
+}

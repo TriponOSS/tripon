@@ -73,19 +73,23 @@ static const char *sev_word(Sev s) {
 
 void print_diags(bool json) {
     if (json) {
+        if (g_ndiags == 0) {
+            puts("[]");
+            return;
+        }
         fputs("[", stdout);
         for (int i = 0; i < g_ndiags; i++) {
             Diag *d = &g_diags[i];
             const ErrEntry *e = err_lookup(d->code);
             if (i) fputs(",", stdout);
-            fprintf(stdout, "\n  {\"code\": \"E%04d\", \"kind\": \"%s\", ", d->code, sev_word(d->sev));
-            json_str(e->name, stdout);
-            fputs(", \"file\": ", stdout); json_str(d->span.file, stdout);
-            fprintf(stdout, ", \"line\": %d, \"col\": %d, \"len\": %d, \"msg\": ",
+            fprintf(stdout, "\n  { \"code\": \"E%04d\", \"kind\": \"%s\", \"name\": \"%s\", ",
+                    d->code, sev_word(d->sev), e->name);
+            fputs("\"file\": ", stdout); json_str(d->span.file, stdout);
+            fprintf(stdout, ", \"line\": %d, \"col\": %d, \"len\": %d",
                     d->span.line, d->span.col, d->span.len);
-            json_str(d->msg, stdout);
+            fputs(", \"msg\": ", stdout); json_str(d->msg, stdout);
             fputs(", \"hint\": ", stdout); json_str(d->hint, stdout);
-            fputs("}", stdout);
+            fputs(" }", stdout);
         }
         fputs("\n]\n", stdout);
     } else {

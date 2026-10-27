@@ -1,0 +1,21 @@
+// examples/tiers.tp - the tier system: same code runs free of allocation
+// Tier 0 (kernel) has no alloc, no runtime: pure computation only.
+// This file declares core; a kernel-tier program drops everything but
+// fn/struct/enum/fixed arrays/ints/extern.
+
+use tier core;
+
+fn checksum(data: i32, rounds: i32) -> i32 {
+    let acc = 0;
+    let round = 0;
+    while round < rounds {
+        acc = (acc + data) % 65521;
+        round += 1;
+    }
+    return acc;
+}
+
+fn main() -> i32 {
+    print_i32(checksum(1234, 10));
+    return 0;
+}

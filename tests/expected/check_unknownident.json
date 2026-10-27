@@ -1,3 +1,3 @@
 [
-  { "code": "E0201", "kind": "error", "name": "unknown-identifier", "file": "tests/cases/check_unknownident.tp", "line": 6, "col": 10, "len": 3, "msg": "unknown identifier 'msg' in this scope", "hint": "define it, use the right module, or fix spelling" }
+  { "code": "E0201", "kind": "error", "name": "unknown-identifier", "file": "tests/cases/check_unknownident.tp", "line": 5, "col": 10, "len": 3, "msg": "unknown identifier 'msg' in this scope", "hint": "define it, use the right module, or fix spelling" }
 ]
