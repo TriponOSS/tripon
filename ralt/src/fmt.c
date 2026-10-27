@@ -46,6 +46,13 @@ static void fm_indent(Fm *f) {
 
 /* composite type name: struct/enum types print their own name */
 static void fm_tyname(Fm *f, Ty t, const char *tname) {
+    if (t == TY_ARRAY) {
+        ArrayInfo *ai = array_find(tname);
+        if (!ai) { fputs(tname ? tname : ty_name(t), f->out); return; }
+        fprintf(f->out, "[%d]", ai->len);
+        fm_tyname(f, ai->elem_ty, ai->elem_tname);
+        return;
+    }
     if (t == TY_OPT || t == TY_RESULT) {
         /* rebuild the canonical opt<T> / result<T, E> from the anon shape */
         EnDecl *en = tname ? anon_find(tname) : NULL;
@@ -99,6 +106,12 @@ static void fm_expr(Fm *f, Expr *e, int parent_prec) {
         fm_expr(f, e->base, 100);
         fputc('.', f->out);
         fputs(e->sval, f->out);
+        break;
+    case EX_INDEX:
+        fm_expr(f, e->base, 100);
+        fputc('[', f->out);
+        fm_expr(f, e->index, 0);
+        fputc(']', f->out);
         break;
     case EX_STRUCTINIT: {
         fputs(e->sval, f->out);

@@ -1,0 +1,9 @@
+use tier core;
+
+fn main() -> i32 {
+    let a: [5]i32;
+    let i = 5;
+    a[i] = 7;
+    print_i32(a[i]);
+    return 0;
+}

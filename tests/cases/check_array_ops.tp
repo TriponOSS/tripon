@@ -1,0 +1,10 @@
+use tier core;
+
+fn main() -> i32 {
+    let a: [3]i32;
+    let b: [3]i32;
+    if a == b {
+        print_i32(1);
+    }
+    return 0;
+}

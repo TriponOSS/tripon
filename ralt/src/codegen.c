@@ -70,6 +70,24 @@ static const char *tp_type_name(Cg *g, Ty t, const char *tname) {
     return ty_cname(t);
 }
 
+/* C declarator for a value: scalar types print "T name", fixed arrays print
+ * "T name[N]" with dimensions outermost-first. */
+static void emit_decl_name(Cg *g, Ty ty, const char *tname, const char *name) {
+    int dims[16];
+    int nd = 0;
+    Ty cur = ty;
+    const char *ct = tname;
+    while (cur == TY_ARRAY && nd < (int)(sizeof dims / sizeof dims[0])) {
+        ArrayInfo *ai = array_find(ct);
+        if (!ai) break;
+        dims[nd++] = ai->len;
+        cur = ai->elem_ty;
+        ct = ai->elem_tname;
+    }
+    fprintf(g->out, "%s %s", tp_type_name(g, cur, ct), name);
+    for (int i = 0; i < nd; i++) fprintf(g->out, "[%d]", dims[i]);
+}
+
 static EnDecl *cg_enum(Cg *g, const char *name) {
     for (int i = 0; i < g->nens; i++)
         if (strcmp(g->ens[i]->name, name) == 0) return g->ens[i];
@@ -144,6 +162,9 @@ static void emit_prologue(Cg *g) {
     fputs("static void tp_builtin_print_f64(double x) { printf(\"%.2f\\n\", x); }\n", g->out);
     fputs("static void tp_builtin_print_str(const char *x) { fputs(x, stdout); fputc('\\n', stdout); }\n", g->out);
     fputs("static int32_t tp_builtin_len(const char *x) { return (int32_t)strlen(x); }\n", g->out);
+    fputs("static int64_t tp_bounds_g(int64_t i, int64_t n, const char *s, int l) { if (i < 0 || i >= n) tp_fail(s, l, 9002, \"index-out-of-bounds\"); return i; }\n", g->out);
+    fputs("static int64_t tp_strbounds_g(int64_t i, const char *x, const char *s, int l) { if (i < 0 || i >= (int64_t)strlen(x)) tp_fail(s, l, 9002, \"index-out-of-bounds\"); return i; }\n", g->out);
+    fputs("static void tp_arrcpy(void *d, const void *s, size_t n) { memcpy(d, s, n); }\n", g->out);
     fputs("static int tp_str_eq(const char *a, const char *b) { return strcmp(a, b) == 0; }\n", g->out);
     fputs("static double tp_pow_f64(double a, double b) { return pow(a, b); }\n", g->out);
 }
@@ -182,10 +203,12 @@ static void emit_typedefs(Cg *g) {
     for (int i = 0; i < g->nsts; i++) {
         StDecl *st = g->sts[i];
         fprintf(g->out, "typedef struct tp_%s {\n", st->name);
-        for (int f = 0; f < st->nfields; f++)
-            fprintf(g->out, "    %s %s;\n",
-                    tp_type_name(g, st->fields[f].ty, st->fields[f].tname),
-                    cg_ident(g, st->fields[f].name));
+        for (int f = 0; f < st->nfields; f++) {
+            fputs("    ", g->out);
+            emit_decl_name(g, st->fields[f].ty, st->fields[f].tname,
+                           cg_ident(g, st->fields[f].name));
+            fputs(";\n", g->out);
+        }
         fprintf(g->out, "} tp_%s;\n", st->name);
     }
     for (int i = 0; i < g->nens; i++)
@@ -436,6 +459,11 @@ static void emit_expr(Cg *g, Expr *e) {
         fputs(cg_ident(g, e->sval), g->out);
         break;
     case EX_CALL: {
+        if (strcmp(e->callee, "len") == 0 && e->nargs == 1 &&
+            e->args[0]->ty == TY_ARRAY) {
+            fprintf(g->out, "%lld", (long long)e->ival);   /* compile-time N */
+            break;
+        }
         if (is_builtin(e->callee)) {
             fprintf(g->out, "tp_builtin_%s(", e->callee);
             emit_expr(g, e->args[0]);
@@ -467,6 +495,34 @@ static void emit_expr(Cg *g, Expr *e) {
     case EX_BIN:
         emit_bin(g, e);
         break;
+    case EX_INDEX: {
+        Expr *base = e->base;
+        if (base->ty == TY_STR) {
+            fputs("((uint8_t)", g->out);
+            emit_expr(g, base);
+            fputs("[tp_strbounds_g((int64_t)(", g->out);
+            emit_expr(g, e->index);
+            fputs("), ", g->out);
+            emit_expr(g, base);
+            cg_trap_args(g, e->span);
+            fputs(")])", g->out);
+            break;
+        }
+        ArrayInfo *ai = array_find(base->tname);
+        emit_expr(g, base);
+        fputc('[', g->out);
+        if (!ai || e->index->kind == EX_INT) {
+            emit_expr(g, e->index);     /* proven in range at compile time */
+        } else {
+            fputs("tp_bounds_g((int64_t)(", g->out);
+            emit_expr(g, e->index);
+            fprintf(g->out, "), (int64_t)%d", ai->len);
+            cg_trap_args(g, e->span);
+            fputc(')', g->out);
+        }
+        fputc(']', g->out);
+        break;
+    }
     case EX_FIELD:
         emit_expr(g, e->base);
         fputc('.', g->out);
@@ -536,13 +592,28 @@ static void emit_spread_head(Cg *g, Expr *sp, const char **member) {
 /* assignment targets: bindings and struct field chains */
 static void emit_lvalue(Cg *g, Expr *t) {
     if (t->kind == EX_IDENT) fputs(cg_ident(g, t->sval), g->out);
-    else if (t->kind == EX_FIELD) emit_expr(g, t);
+    else if (t->kind == EX_FIELD || t->kind == EX_INDEX) emit_expr(g, t);
     else fputs(cg_ident(g, t->kind == EX_IDENT ? t->sval : "?"), g->out);
 }
 
 static void emit_stmt(Cg *g, Stmt *s) {
     switch (s->kind) {
     case ST_LET: {
+        if (s->ty == TY_ARRAY) {
+            const char *nm = cg_ident(g, s->name);
+            emit_decl_name(g, s->ty, s->tname, nm);
+            if (!s->init) {
+                fputs(" = {0};\n", g->out);
+                break;
+            }
+            fputs(";\n", g->out);
+            fputs("tp_arrcpy(", g->out);
+            fputs(nm, g->out);
+            fputs(", ", g->out);
+            emit_expr(g, s->init);
+            fprintf(g->out, ", sizeof(%s));\n", nm);
+            break;
+        }
         if (s->init && s->init->kind == EX_SPREAD && s->init->operand) {
             const char *m;
             emit_spread_head(g, s->init, &m);
@@ -574,6 +645,16 @@ static void emit_stmt(Cg *g, Stmt *s) {
     }
     case ST_ASSIGN: {
         Expr *t = s->target;
+        if (s->aop == TK_ASSIGN && t->ty == TY_ARRAY) {
+            fputs("tp_arrcpy(", g->out);
+            emit_lvalue(g, t);
+            fputs(", ", g->out);
+            emit_expr(g, s->value);
+            fputs(", sizeof(", g->out);
+            emit_lvalue(g, t);
+            fputs("));\n", g->out);
+            break;
+        }
         if (s->aop == TK_ASSIGN) {
             if (s->value->kind == EX_SPREAD && s->value->operand) {
                 const char *m;

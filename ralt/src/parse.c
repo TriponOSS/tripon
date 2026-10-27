@@ -42,6 +42,29 @@ static Token *expect_token(Parser *p, TokKind k, const char *what) {
  * (TY_TYPEDEF): the typecheck pre-pass resolves it against the decl tables. */
 static Ty parse_type(Parser *p, const char **tname) {
     if (tname) *tname = NULL;
+    /* fixed array: "[" Num "]" Type (grammar.ebnf ArrayType). No slice in v0. */
+    if (at(p, TK_LB)) {
+        Token *lb = advance(p);
+        Token *num = expect_token(p, TK_INT, "an array length");
+        expect_token(p, TK_RB, "']' after the array length");
+        const char *en = NULL;
+        Ty et = parse_type(p, &en);
+        if (num->ival <= 0 || num->ival > 2147483647LL)
+            diag(num->span, E0202, SEV_ERROR, "array length must be in 1..2147483647",
+                 "fixed arrays have at least one element");
+        if (et == TY_VOID)
+            diag(lb->span, E0202, SEV_ERROR, "arrays of () are not data",
+                 "use a scalar, str, or struct element type");
+        const char *edisp = (et == TY_TYPEDEF || et == TY_STRUCT || et == TY_ENUM ||
+                             et == TY_OPT || et == TY_RESULT || et == TY_ARRAY)
+                          ? en : ty_name(et);
+        char buf[192];
+        snprintf(buf, sizeof buf, "[%lld]%s", num->ival, edisp ? edisp : "?");
+        const char *name = arena_dupstr(p->a, buf, strlen(buf));
+        array_declare(name, (int)num->ival, et, en, lb->span);
+        if (tname) *tname = name;
+        return TY_ARRAY;
+    }
     if (eat(p, TK_LP) && eat(p, TK_RP)) {
         return TY_VOID;     /* "()" = unit/void */
     }
@@ -304,10 +327,14 @@ static Expr *parse_unary(Parser *p) {
             continue;
         }
         if (at(p, TK_LB)) {
-            diag(peek(p)->span, E0101, SEV_ERROR, "indexing lands with slices (P1.2)",
-                 "fixed arrays arrive with slices");
             advance(p);
-            advance(p);
+            Expr *ix = new_expr(p, EX_INDEX, e->span);
+            ix->base = e;
+            ix->index = parse_expr(p);
+            Token *rb = expect_token(p, TK_RB, "']' to close the index");
+            if (rb->span.line == e->span.line)
+                ix->span.len = rb->span.col + rb->span.len - e->span.col;
+            e = ix;
             continue;
         }
         /* spread `?` (T4): lowest-forced postfix, opt/result unwrap-propagate */

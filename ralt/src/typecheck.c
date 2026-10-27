@@ -189,6 +189,15 @@ static Ty resolve_tname(Ctx *c, const char *name, Span sp) {
     return TY_UNSET;
 }
 
+static void resolve_array(Ctx *c, const char *name, Span sp) {
+    ArrayInfo *ai = array_find(name);
+    if (!ai) return;
+    if (ai->elem_ty == TY_TYPEDEF)
+        ai->elem_ty = resolve_tname(c, ai->elem_tname, sp);
+    else if (ai->elem_ty == TY_ARRAY)
+        resolve_array(c, ai->elem_tname, sp);
+}
+
 static void prepass_types(Ctx *c, Decl **decls, int ndecls) {
     c->sts = arena_zalloc(c->a, sizeof(StDecl *) * (size_t)(ndecls ? ndecls : 1));
     c->ens = arena_zalloc(c->a, sizeof(EnDecl *) * (size_t)(ndecls ? ndecls : 1));
@@ -205,6 +214,7 @@ static void prepass_types(Ctx *c, Decl **decls, int ndecls) {
             for (int f = 0; f < st->nfields; f++) {
                 StField *fl = &st->fields[f];
                 if (fl->ty == TY_TYPEDEF) fl->ty = resolve_tname(c, fl->tname, fl->span);
+                else if (fl->ty == TY_ARRAY) resolve_array(c, fl->tname, fl->span);
             }
             c->sts[c->nsts++] = st;
         } else if (decls[i]->kind == D_ENUM) {
@@ -219,19 +229,39 @@ static void prepass_types(Ctx *c, Decl **decls, int ndecls) {
                 for (int k = 0; k < en->variants[v].npayloads; k++) {
                     Payload *pl = &en->variants[v].payloads[k];
                     if (pl->ty == TY_TYPEDEF) pl->ty = resolve_tname(c, pl->tname, pl->span);
+                    else if (pl->ty == TY_ARRAY) {
+                        resolve_array(c, pl->tname, pl->span);
+                        diag(pl->span, E0202, SEV_ERROR,
+                             "arrays are not allowed in enum payloads in v0",
+                             "carry the array in a struct or keep it as a local");
+                    }
                 }
             c->ens[c->nens++] = en;
         }
+    }
+    /* local array annotations resolve against all declared types */
+    for (int i = 0; i < array_count(); i++) {
+        ArrayInfo *ai = array_at(i);
+        resolve_array(c, ai->name, ai->span);
     }
     /* fn signatures may reference any declared type in the file */
     for (int i = 0; i < ndecls; i++) {
         if (decls[i]->kind != D_FN) continue;
         FnDecl *fn = decls[i]->fn;
-        for (int k = 0; k < fn->nparams; k++)
+        for (int k = 0; k < fn->nparams; k++) {
             if (fn->params[k].ty == TY_TYPEDEF)
                 fn->params[k].ty = resolve_tname(c, fn->params[k].tname, fn->params[k].span);
+            if (fn->params[k].ty == TY_ARRAY)
+                diag(fn->params[k].span, E0202, SEV_ERROR,
+                     "arrays are local-only in v0 (no array parameters)",
+                     "pass a struct wrapper or index the array in the caller");
+        }
         if (fn->ret == TY_TYPEDEF)
             fn->ret = resolve_tname(c, fn->retname, fn->span);
+        if (fn->ret == TY_ARRAY)
+            diag(fn->span, E0202, SEV_ERROR,
+                 "arrays are local-only in v0 (no array returns)",
+                 "return a struct wrapper or fill a caller-owned array");
     }
     /* anon opt/result payloads resolve like enum payloads; parsed v0 surface
      * violations (nesting, str-in-opt, void) already carry their parse diag */
@@ -242,6 +272,12 @@ static void prepass_types(Ctx *c, Decl **decls, int ndecls) {
                 Payload *pl = &g_anons[i]->variants[v].payloads[k];
                 if (pl->ty == TY_TYPEDEF)
                     pl->ty = resolve_tname(c, pl->tname, pl->span);
+                if (pl->ty == TY_ARRAY) {
+                    diag(pl->span, E0202, SEV_ERROR,
+                         "arrays are not allowed in opt/result payloads in v0",
+                         "wrap the array in a struct or keep it as a local");
+                    continue;
+                }
                 if (pl->ty == TY_UNSET || pl->ty == TY_VOID ||
                     (pl->ty == TY_STR && is_opt) ||
                     pl->ty == TY_OPT || pl->ty == TY_RESULT) continue;
@@ -272,6 +308,16 @@ static void tx_disp(char *buf, size_t n, Ty t, const char *tnm) {
 }
 
 static const char *ty_disp(Ty t, const char *tnm) {
+    if (t == TY_ARRAY) {
+        static char abufs[4][160];
+        static int arot = 0;
+        char *b = abufs[arot++ % 4];
+        ArrayInfo *ai = array_find(tnm);
+        if (!ai) snprintf(b, sizeof abufs[0], "[?]?");
+        else snprintf(b, sizeof abufs[0], "[%d]%s", ai->len,
+                      ty_disp(ai->elem_ty, ai->elem_tname));
+        return b;
+    }
     if (t == TY_OPT || t == TY_RESULT) {
         static char bufs[4][96];
         static int rot = 0;
@@ -286,7 +332,7 @@ static const char *ty_disp(Ty t, const char *tnm) {
 static bool ty_same(Ty a, const char *an, Ty b, const char *bn) {
     if (a != b) return false;
     if (a == TY_STRUCT || a == TY_ENUM || a == TY_TYPEDEF ||
-        a == TY_OPT || a == TY_RESULT)
+        a == TY_OPT || a == TY_RESULT || a == TY_ARRAY)
         return an && bn && strcmp(an, bn) == 0;
     return true;
 }
@@ -312,6 +358,17 @@ static Ty lit_adopt(Expr *lit, Ty partner) {
     default: break;
     }
     return TY_UNSET;
+}
+
+/* integer literal index: plain int or a negated int literal */
+static bool idx_lit(Expr *e, long long *v) {
+    if (e->kind == EX_INT) { *v = e->ival; return true; }
+    if (e->kind == EX_UN && e->unop == UN_NEG && e->operand &&
+        e->operand->kind == EX_INT) {
+        *v = -e->operand->ival;
+        return true;
+    }
+    return false;
 }
 
 /* -------- expected-type context + bare ctor plumbing (T3/T4) -------- */
@@ -486,6 +543,26 @@ static Ty tc_expr(Ctx *c, Expr *e) {
         bool ctor = strcmp(nm, "some") == 0 || strcmp(nm, "none") == 0 ||
                     strcmp(nm, "ok") == 0 || strcmp(nm, "err") == 0;
         if (ctor && !find_fn(c, nm)) return tc_ctor(c, e, nm);
+        /* len: str uses strlen at runtime; fixed arrays are a compile-time N */
+        if (strcmp(e->callee, "len") == 0 && e->nargs == 1) {
+            Ty at = tc_expr(c, e->args[0]);
+            if (at == TY_ARRAY) {
+                ArrayInfo *ai = array_find(e->args[0]->tname);
+                e->ty = TY_I32;
+                e->ival = ai ? ai->len : 0;
+                return e->ty;
+            }
+            if (at == TY_STR) { e->ty = TY_I32; return e->ty; }
+            if (at != TY_UNSET) {
+                char msg[220];
+                snprintf(msg, sizeof msg, "len() takes an array or str, got %s",
+                         ty_disp(at, e->args[0]->tname));
+                diag(e->args[0]->span, E0202, SEV_ERROR, msg,
+                     "len is defined for fixed arrays and str only");
+            }
+            e->ty = TY_I32;
+            return e->ty;
+        }
         int bret, bargc; Ty barg;
         if (builtin_info(e->callee, &bret, &bargc, &barg)) {
             if (e->nargs != bargc) {
@@ -628,6 +705,13 @@ static Ty tc_expr(Ctx *c, Expr *e) {
                     e->ty = TY_BOOL;
                     return TY_BOOL;
                 }
+                if (lhs == TY_ARRAY) {
+                    diag(e->span, E0207, SEV_ERROR,
+                         "array equality is not defined; compare element-by-element",
+                         "write a loop and compare each index, or compare a hash");
+                    e->ty = TY_BOOL;
+                    return TY_BOOL;
+                }
                 /* composites have no generated equality in v0: E0207, not E0202 */
                 char msg[240];
                 snprintf(msg, sizeof msg, "composite equality on %s is not defined; no cast exists for it",
@@ -673,6 +757,66 @@ static Ty tc_expr(Ctx *c, Expr *e) {
             e->tname = e->lhs->tname;
             return lhs;
         }
+        e->ty = TY_UNSET;
+        return TY_UNSET;
+    }
+
+    case EX_INDEX: {
+        Ty bt = tc_expr(c, e->base);
+        if (bt == TY_UNSET) { e->ty = TY_UNSET; return TY_UNSET; }
+        if (bt == TY_ARRAY) {
+            ArrayInfo *ai = array_find(e->base->tname);
+            if (!ai) {
+                diag(e->base->span, E0202, SEV_ERROR, "unknown array type",
+                     "the array type was not registered by the parser");
+                e->ty = TY_UNSET;
+                return TY_UNSET;
+            }
+            Ty it = tc_expr(c, e->index);
+            if (it != TY_UNSET && !ty_is_int(it)) {
+                char msg[220];
+                snprintf(msg, sizeof msg, "array index must be an integer, got %s",
+                         ty_disp(it, e->index->tname));
+                diag(e->index->span, E0202, SEV_ERROR, msg,
+                     "indexes are i8..u64; cast the value explicitly if needed");
+            } else if (it != TY_UNSET) {
+                long long k;
+                if (idx_lit(e->index, &k) && (k < 0 || k >= ai->len)) {
+                    char msg[220], hint[160];
+                    snprintf(msg, sizeof msg, "index %lld is out of bounds for [%d]",
+                             k, ai->len);
+                    snprintf(hint, sizeof hint, "valid indexes are 0 through %d",
+                             ai->len - 1);
+                    diag(e->index->span, E0202, SEV_ERROR, msg, hint);
+                }
+            }
+            e->ty = ai->elem_ty;
+            e->tname = ai->elem_tname;
+            e->lvalue = e->base->lvalue;
+            e->is_const_ref = e->base->is_const_ref;
+            return e->ty;
+        }
+        if (bt == TY_STR) {
+            Ty it = tc_expr(c, e->index);
+            if (it != TY_UNSET && !ty_is_int(it)) {
+                char msg[220];
+                snprintf(msg, sizeof msg, "str index must be an integer, got %s",
+                         ty_disp(it, e->index->tname));
+                diag(e->index->span, E0202, SEV_ERROR, msg,
+                     "indexes are i8..u64; cast the value explicitly if needed");
+            }
+            e->ty = TY_U8;              /* one byte */
+            e->tname = NULL;
+            e->lvalue = false;
+            e->is_const_ref = false;
+            return TY_U8;
+        }
+        char msg[220];
+        snprintf(msg, sizeof msg, "indexing needs an array or str, got %s",
+                 ty_disp(bt, e->base->tname));
+        diag(e->base->span, E0202, SEV_ERROR, msg,
+             "only fixed arrays and str support [i] in v0");
+        tc_expr(c, e->index);
         e->ty = TY_UNSET;
         return TY_UNSET;
     }
@@ -727,6 +871,13 @@ static Ty tc_expr(Ctx *c, Expr *e) {
                 char msg[200];
                 snprintf(msg, sizeof msg, "struct '%s' has no field '%s'", st->name, e->inames[i]);
                 diag(e->span, E0202, SEV_ERROR, msg, "check the field list in the struct decl");
+                tc_expr(c, e->args[i]);
+                continue;
+            }
+            if (st->fields[idx].ty == TY_ARRAY) {
+                diag(e->args[i]->span, E0202, SEV_ERROR,
+                     "array fields cannot be set in a struct literal in v0",
+                     "declare the struct with let, then assign array elements");
                 tc_expr(c, e->args[i]);
                 continue;
             }
@@ -937,13 +1088,22 @@ static void tc_stmt(Ctx *c, Stmt *s) {
         /* write back so codegen emits the inferred type */
         s->ty = declared;
         if (declared != TY_STRUCT && declared != TY_ENUM &&
-            declared != TY_OPT && declared != TY_RESULT) s->tname = NULL;
+            declared != TY_OPT && declared != TY_RESULT &&
+            declared != TY_ARRAY) s->tname = NULL;
         else if (s->init && !s->tname) s->tname = s->init->tname;
         scope_insert(c, s->name, declared, s->tname, s->is_const, s->span);
         break;
     }
     case ST_ASSIGN: {
         Ty tt = tc_expr(c, s->target);
+        if (s->target->kind == EX_INDEX && s->target->base &&
+            s->target->base->ty == TY_STR) {
+            diag(s->target->span, E0202, SEV_ERROR,
+                 "str is immutable in v0; cannot assign to s[i]",
+                 "copy bytes into a [N]u8 array instead");
+            tc_expr(c, s->value);
+            break;
+        }
         int was = c->spread_pos;
         c->spread_pos = 1;
         Ty vt = tc_expr_w(c, s->value, tt, s->target->tname);

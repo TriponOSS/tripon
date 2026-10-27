@@ -141,6 +141,7 @@ typedef enum {
     TY_TYPEDEF,             /* parsed name, pre-pass resolves it */
     TY_UNSET,               /* pre-inference */
     TY_OPT, TY_RESULT,      /* opt<T> / result<T,E>; tname = anon enum name */
+    TY_ARRAY,               /* fixed array; tname = canonical "[N]T" name */
 } Ty;
 
 const char *ty_name(Ty t);
@@ -148,6 +149,21 @@ const char *ty_cname(Ty t);      /* C99 emit name */
 bool ty_is_int(Ty t);
 bool ty_is_float(Ty t);
 bool ty_is_num(Ty t);
+
+/* fixed-array types: canonical name -> (length, element type). Declared at
+ * parse time so typecheck/codegen/fmt all see the same shape. */
+typedef struct {
+    const char *name;       /* "[4]i32", "[3]Point", nested "[2][3]i32" */
+    int len;
+    Ty elem_ty;
+    const char *elem_tname;
+    Span span;
+} ArrayInfo;
+
+ArrayInfo *array_declare(const char *name, int len, Ty elem, const char *elem_tname, Span sp);
+ArrayInfo *array_find(const char *name);
+int array_count(void);
+ArrayInfo *array_at(int i);
 
 /* ---------------- AST ---------------- */
 

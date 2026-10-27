@@ -1,0 +1,8 @@
+use tier core;
+
+fn main() -> i32 {
+    let s = "abc";
+    let i = 3;
+    print_i32(cast<i32>(s[i]));
+    return 0;
+}
