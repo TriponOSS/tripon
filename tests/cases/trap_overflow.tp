@@ -1,0 +1,7 @@
+use tier core;
+fn main() -> i32 {
+    let big = 2147483647;
+    let over = big + 1;
+    print_i32(over);
+    return 0;
+}

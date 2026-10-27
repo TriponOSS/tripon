@@ -1,0 +1,7 @@
+use tier core;
+fn main() -> i32 {
+    let z = 0;
+    let boom = 10 / z;
+    print_i32(boom);
+    return 0;
+}

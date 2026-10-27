@@ -1,0 +1,6 @@
+use tier core;
+
+fn main() -> i32 {
+    let = 5;
+    return 0;
+}

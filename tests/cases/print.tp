@@ -1,0 +1,9 @@
+use tier core;
+extern "C" { fn puts(p: str) -> i32; }
+
+fn main() -> i32 {
+    print_i32(45);
+    print_i32(42 + 1);
+    print_f64(2.5);
+    return 0;
+}

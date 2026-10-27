@@ -1,0 +1,20 @@
+use tier core;
+
+extern "C" {
+    fn puts(p: str) -> i32;
+}
+
+fn main() -> i32 {
+    let x = 5;
+    const LIMIT = 4;
+    let total = 0;
+    let idx = 0;
+    while idx < LIMIT {
+        total = total + x;
+        idx += 1;
+    }
+    if total == 20 { puts("hello loop"); }
+    else { puts("bad math"); }
+    puts("done");
+    return 0;
+}

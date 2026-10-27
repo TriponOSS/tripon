@@ -1,0 +1,7 @@
+use tier core;
+
+fn main() -> i32 {
+    const LIMIT = 10;
+    LIMIT = 20;
+    return 0;
+}

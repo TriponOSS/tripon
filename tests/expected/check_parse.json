@@ -1,0 +1,3 @@
+[
+  { "code": "E0101", "kind": "error", "name": "unexpected-token", "file": "tests/cases/check_parse.tp", "line": 4, "col": 9, "len": 2, "msg": "expected identifier after let, got '='", "hint": "see spec/grammar.ebnf for what is legal here" }
+]

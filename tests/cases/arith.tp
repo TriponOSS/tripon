@@ -1,0 +1,16 @@
+use tier core;
+extern "C" { fn puts(p: str) -> i32; }
+
+fn main() -> i32 {
+    let a = 7 + 3 * 2;
+    let b = (7 + 3) / 2;
+    let c = 7 % 3;
+    let d = -5;
+    let e = 10;
+    e *= 2;
+    e += 3;
+    if a == 13 && b == 5 && c == 1 { puts("ok1"); }
+    if d == -5 && e == 23 { puts("ok2"); }
+    if !(a != 13) { puts("ok3"); }
+    return 0;
+}

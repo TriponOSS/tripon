@@ -1,0 +1,7 @@
+use tier core;
+extern "C" { fn puts(p: str) -> i32; }
+
+fn main() -> i32 {
+    let x = 5 + "hello";
+    return 0;
+}

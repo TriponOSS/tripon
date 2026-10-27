@@ -19,3 +19,4 @@ E9002,trap,index-out-of-bounds,indexing is bounds-checked everywhere; slice.len(
 E0601,warn,unused-binding,naming prefix _x mutes this warning
 E0602,warn,unreachable-code,this line can never execute after an earlier return or match arm
 E0603,warn,shadowing,binding re-shadows an existing name in scope; rename it
+E9003,trap,division-by-zero-trap,div and mod by zero are defined traps; guard the divisor

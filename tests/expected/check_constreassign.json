@@ -1,0 +1,3 @@
+[
+  { "code": "E0203", "kind": "error", "name": "mutability-required", "file": "tests/cases/check_constreassign.tp", "line": 5, "col": 5, "len": 5, "msg": "LIMIT is const and cannot be reassigned", "hint": "declared const but reassigned; switch to let" }
+]
