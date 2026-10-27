@@ -7,7 +7,8 @@ typedef struct {
     int ntoks, pos;
     Arena *a;
     const char *file;
-    int si_ok;   /* struct-init IDENT '{' currently allowed (suppressed in if/while/match conditions) */
+    int si_ok;      /* struct-init IDENT '{' currently allowed (suppressed in if/while/match conditions) */
+    int no_anon;    /* struct fields / enum payloads deny opt/result types in v0 */
 } Parser;
 
 static Token *peek(Parser *p) { return &p->toks[p->pos]; }
@@ -54,6 +55,62 @@ static Ty parse_type(Parser *p, const char **tname) {
     };
     for (size_t i = 0; i < sizeof TYPES / sizeof TYPES[0]; i++)
         if (strcmp(TYPES[i].n, t->text) == 0) return TYPES[i].ty;
+    /* opt<T> / result<T, E> (T3/T4): sugar over built-in anonymous tagged enums.
+     * Name convention: tp_<anon> in C; the raw anon name lives in *tname so
+     * typecheck/codegen instantiate the same enum shape everywhere. */
+    if ((strcmp(t->text, "opt") == 0 || strcmp(t->text, "result") == 0) && at(p, TK_LT)) {
+        Ty kind = strcmp(t->text, "result") == 0 ? TY_RESULT : TY_OPT;
+        advance(p);                     /* '<' */
+        if (p->no_anon) {
+            diag(t->span, E0202, SEV_ERROR,
+                 "opt/result types are not stored inside struct fields or enum payloads in v0",
+                 "put opt/result on fn signatures and let bindings for now");
+        }
+        Span psp = peek(p)->span;       /* first payload token */
+        Ty pt; const char *pn = NULL;
+        Ty et = TY_UNSET; const char *en = NULL;
+        pt = parse_type(p, &pn);
+        Payload pls[2];
+        memset(&pls, 0, sizeof pls);
+        pls[0].ty = pt;
+        pls[0].tname = pn;
+        pls[0].span = psp;
+        if (kind == TY_RESULT) {
+            expect_token(p, TK_COMMA, "',' between result payloads");
+            Span esp = peek(p)->span;
+            et = parse_type(p, &en);
+            pls[1].ty = et;
+            pls[1].tname = en;
+            pls[1].span = esp;
+        }
+        expect_token(p, TK_GT, "'>' to close the opt/result payload list");
+        /* v0 surface: no nesting, opt carries scalar/struct only */
+        if (pt == TY_OPT || pt == TY_RESULT || et == TY_OPT || et == TY_RESULT) {
+            diag(psp, E0202, SEV_ERROR, "opt cannot nest v0 (same for result)",
+                 "flatten the shape: carry nest-shaped data in a struct");
+        }
+        if (pt == TY_VOID || et == TY_VOID) {
+            diag(psp, E0202, SEV_ERROR, "() payload is not data",
+                 "opt/result carry a scalar, str, or struct");
+        }
+        if (kind == TY_OPT && pt == TY_STR) {
+            diag(psp, E0202, SEV_ERROR, "opt<str> is not v0: opt carries a scalar or struct",
+                 "store the str on a struct or use result<i32, str> for failure values");
+        }
+        /* anon enum name built from the payload names before resolution */
+        const char *pcan = pt == TY_TYPEDEF ? pn : ty_name(pt);
+        char buf[192];
+        if (kind == TY_RESULT) {
+            const char *ecan = et == TY_TYPEDEF ? en : ty_name(et);
+            snprintf(buf, sizeof buf, "result_%s_%s", pcan ? pcan : "?", ecan ? ecan : "?");
+        } else {
+            snprintf(buf, sizeof buf, "opt_%s", pcan ? pcan : "?");
+        }
+        const char *name = arena_dupstr(p->a, buf, strlen(buf));
+        anon_declare(name, pls, kind == TY_RESULT ? 2 : 1, t->span);
+        if (tname) *tname = name;
+        return kind;
+    }
     if (tname) *tname = t->text;
     return TY_TYPEDEF;
 }
@@ -106,6 +163,14 @@ static Expr *parse_primary(Parser *p) {
         advance(p);
         e->sval = t->text;
         e->ty = TY_UNSET;
+        /* v0 has no null (T3): the keyword does not exist; a bare ident
+         * spelled "null" gets the spec diagnostic and no value */
+        if (strcmp(t->text, "null") == 0) {
+            diag(t->span, E0204, SEV_ERROR,
+                 "null and undefined do not exist; use opt (T) for may-be-missing values",
+                 "hold the maybe-missing value as opt<T> and match some/none");
+            return e;
+        }
         /* variant value: Enum::Variant [ ( payloads ) ] */
         if (at(p, TK_COLON2)) {
             advance(p);
@@ -243,6 +308,16 @@ static Expr *parse_unary(Parser *p) {
                  "fixed arrays arrive with slices");
             advance(p);
             advance(p);
+            continue;
+        }
+        /* spread `?` (T4): lowest-forced postfix, opt/result unwrap-propagate */
+        if (at(p, TK_QUESTION)) {
+            Token *q = advance(p);
+            Expr *s = new_expr(p, EX_SPREAD, e->span);
+            s->operand = e;
+            if (q->span.line == e->span.line)
+                s->span.len = q->span.col + q->span.len - e->span.col;
+            e = s;
             continue;
         }
         break;
@@ -526,7 +601,9 @@ static EnDecl *parse_enum(Parser *p) {
         if (eat(p, TK_LP)) {
             while (!at(p, TK_RP) && !at(p, TK_EOF)) {
                 Payload *pl = arena_alloc(p->a, sizeof(Payload));
+                p->no_anon = 1;
                 pl->ty = parse_type(p, &pl->tname);
+                p->no_anon = 0;
                 pl->span = peekn(p, -1)->span;
                 Payload *na = realloc(v->payloads == NULL ? malloc(0) : v->payloads,
                                       (size_t)(v->npayloads + 1) * sizeof(Payload));
@@ -561,7 +638,9 @@ static StDecl *parse_struct(Parser *p) {
         StField *f = arena_alloc(p->a, sizeof(StField));
         f->name = fn->text;
         f->span = fn->span;
+        p->no_anon = 1;
         f->ty = parse_type(p, &f->tname);
+        p->no_anon = 0;
         expect_token(p, TK_SEMI, "';' after each field");
         StField *na = realloc(st->fields == NULL ? malloc(0) : st->fields,
                               (size_t)(st->nfields + 1) * sizeof(StField));

@@ -1,0 +1,15 @@
+use tier core;
+
+fn read(c: i32) -> result<i32, str> {
+    return ok(c);
+}
+
+fn write(c: i32) -> result<i32, str> {
+    return err("disk full");
+}
+
+fn main() -> i32 {
+    read(1);
+    write(2);
+    return 0;
+}

@@ -1,0 +1,3 @@
+[
+  { "code": "E0204", "kind": "error", "name": "no-null", "file": "tests/cases/check_null.tp", "line": 2, "col": 13, "len": 4, "msg": "null and undefined do not exist; use opt (T) for may-be-missing values", "hint": "hold the maybe-missing value as opt<T> and match some/none" }
+]

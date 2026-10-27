@@ -1,0 +1,19 @@
+use tier core;
+
+fn read(c: i32) -> result<i32, str> {
+    return ok(c);
+}
+
+fn not_propagating() -> i32 {
+    let v = read(1)?;
+    return v;
+}
+
+fn also_not() -> str {
+    let w = read(2)?;
+    return "checked";
+}
+
+fn main() -> i32 {
+    return 0;
+}

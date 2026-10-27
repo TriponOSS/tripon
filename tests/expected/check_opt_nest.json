@@ -1,0 +1,3 @@
+[
+  { "code": "E0202", "kind": "error", "name": "type-mismatch", "file": "tests/cases/check_opt_nest.tp", "line": 2, "col": 16, "len": 3, "msg": "opt cannot nest v0 (same for result)", "hint": "flatten the shape: carry nest-shaped data in a struct" }
+]

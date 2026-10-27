@@ -139,7 +139,8 @@ typedef enum {
     TY_F32, TY_F64, TY_BOOL, TY_STR, TY_VOID,
     TY_STRUCT, TY_ENUM,     /* resolved by name via decl tables */
     TY_TYPEDEF,             /* parsed name, pre-pass resolves it */
-    TY_UNSET, /* pre-inference */
+    TY_UNSET,               /* pre-inference */
+    TY_OPT, TY_RESULT,      /* opt<T> / result<T,E>; tname = anon enum name */
 } Ty;
 
 const char *ty_name(Ty t);
@@ -158,7 +159,7 @@ typedef struct Decl Decl;
 typedef enum {
     EX_INT, EX_FLOAT, EX_STR, EX_BOOL, EX_IDENT,
     EX_BIN, EX_UN, EX_CALL, EX_INDEX,
-    EX_FIELD, EX_STRUCTINIT, EX_VARIANT, EX_CAST,
+    EX_FIELD, EX_STRUCTINIT, EX_VARIANT, EX_CAST, EX_SPREAD,
 } ExKind;
 
 typedef enum { UN_NOT, UN_NEG, UN_ADDR } UnOp;
@@ -183,6 +184,7 @@ struct Expr {
     const char *callee;
 
     const char *vname;      /* EX_VARIANT: variant name */
+    bool bare_ctor;         /* EX_VARIANT desugared from bare some/none/ok/err */
     const char **inames;    /* EX_STRUCTINIT: field init names, aligned with args */
     const char *tname;      /* resolved struct/enum name of e->ty */
 
@@ -295,6 +297,15 @@ struct Decl {
 /* ---------------- pipeline ---------------- */
 
 const char *tok_kind_word(TokKind k);                /* lex.c */
+
+/* anon opt/result enums: opt<T> / result<T,E> desugar to built-in anonymous
+ * tagged enums (T3/T4). Registry owned by typecheck.c; fed by parse.c (type
+ * annotations) and typecheck.c (inferred ctors), read by codegen.c/fmt.c. */
+EnDecl *anon_find(const char *name);                                     /* NULL if absent */
+EnDecl *anon_declare(const char *name, Payload *pls, int npl, Span sp);  /* dedupe by name */
+int anon_count(void);
+EnDecl *anon_at(int i);
+
 
 /* typed vec struct aliases (VecPtr machinery reused, built on arena) */
 typedef struct VecStmt { Stmt **data; int len, cap; } VecStmt;

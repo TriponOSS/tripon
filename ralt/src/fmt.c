@@ -46,6 +46,20 @@ static void fm_indent(Fm *f) {
 
 /* composite type name: struct/enum types print their own name */
 static void fm_tyname(Fm *f, Ty t, const char *tname) {
+    if (t == TY_OPT || t == TY_RESULT) {
+        /* rebuild the canonical opt<T> / result<T, E> from the anon shape */
+        EnDecl *en = tname ? anon_find(tname) : NULL;
+        if (!en) { fputs(tname ? tname : ty_name(t), f->out); return; }
+        bool is_res = en->variants[1].npayloads == 1;
+        fputs(is_res ? "result<" : "opt<", f->out);
+        fm_tyname(f, en->variants[0].payloads[0].ty, en->variants[0].payloads[0].tname);
+        if (is_res) {
+            fputs(", ", f->out);
+            fm_tyname(f, en->variants[1].payloads[0].ty, en->variants[1].payloads[0].tname);
+        }
+        fputc('>', f->out);
+        return;
+    }
     if ((t == TY_STRUCT || t == TY_ENUM || t == TY_TYPEDEF) && tname) fputs(tname, f->out);
     else fputs(ty_name(t), f->out);
 }
@@ -99,8 +113,10 @@ static void fm_expr(Fm *f, Expr *e, int parent_prec) {
         break;
     }
     case EX_VARIANT:
-        fputs(e->sval, f->out);
-        fputs("::", f->out);
+        if (!e->bare_ctor) {
+            fputs(e->sval, f->out);
+            fputs("::", f->out);
+        }
         fputs(e->vname, f->out);
         if (e->nargs > 0) {
             fputc('(', f->out);
@@ -110,6 +126,10 @@ static void fm_expr(Fm *f, Expr *e, int parent_prec) {
             }
             fputc(')', f->out);
         }
+        break;
+    case EX_SPREAD:
+        fm_expr(f, e->operand, 100);
+        fputc('?', f->out);
         break;
     case EX_CAST:
         fputs("cast<", f->out);

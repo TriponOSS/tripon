@@ -19,6 +19,7 @@ typedef struct {
     EnDecl **ens;
     int nens;
     int nmatch;             /* scrutinee temp counter, decl order keeps it deterministic */
+    int nspread;            /* `?` spread temp counter, same discipline */
     const char *file;
 } Cg;
 
@@ -59,7 +60,8 @@ static const char *cg_fnname(Cg *g, FnDecl *fn) {
 
 /* C name for a Tripon type: composites map to their tp_-prefixed typedef */
 static const char *tp_type_name(Cg *g, Ty t, const char *tname) {
-    if (t == TY_STRUCT || t == TY_ENUM || t == TY_TYPEDEF) {
+    if (t == TY_STRUCT || t == TY_ENUM || t == TY_TYPEDEF ||
+        t == TY_OPT || t == TY_RESULT) {
         size_t n = strlen(tname ? tname : "TpType");
         char *out = arena_alloc(g->a, n + 4);
         snprintf(out, n + 4, "tp_%s", tname ? tname : "TpType");
@@ -71,7 +73,7 @@ static const char *tp_type_name(Cg *g, Ty t, const char *tname) {
 static EnDecl *cg_enum(Cg *g, const char *name) {
     for (int i = 0; i < g->nens; i++)
         if (strcmp(g->ens[i]->name, name) == 0) return g->ens[i];
-    return NULL;
+    return anon_find(name);     /* built-in opt/result shapes */
 }
 
 /* tag index of a variant in its enum (declaration order = deterministic tag) */
@@ -148,6 +150,31 @@ static void emit_prologue(Cg *g) {
 
 /* ---------------- user types ---------------- */
 
+/* tagged value struct, payload union keyed by variant name; shared by user
+ * enums and the built-in opt/result anon enums */
+static void emit_enum_struct(Cg *g, EnDecl *en) {
+    fprintf(g->out, "typedef struct tp_%s {\n    int32_t tp_tag;\n    union {\n", en->name);
+    bool any_payload = false;
+    for (int v = 0; v < en->nvariants; v++) {
+        Variant *va = &en->variants[v];
+        if (va->npayloads == 0) continue;
+        any_payload = true;
+        const char *vn = cg_ident(g, va->name);
+        if (va->npayloads == 1) {
+            fprintf(g->out, "        %s %s;\n",
+                    tp_type_name(g, va->payloads[0].ty, va->payloads[0].tname), vn);
+        } else {
+            fprintf(g->out, "        struct {\n");
+            for (int k = 0; k < va->npayloads; k++)
+                fprintf(g->out, "            %s tp_p%d;\n",
+                        tp_type_name(g, va->payloads[k].ty, va->payloads[k].tname), k);
+            fprintf(g->out, "        } %s;\n", vn);
+        }
+    }
+    if (!any_payload) fputs("        char tp_pad;\n", g->out);
+    fprintf(g->out, "    } tp_as;\n} tp_%s;\n", en->name);
+}
+
 /* structs in declaration order: fields reference only earlier typedefs (prepass).
  * enums: tagged value struct, payload union keyed by variant name. */
 static void emit_typedefs(Cg *g) {
@@ -161,29 +188,11 @@ static void emit_typedefs(Cg *g) {
                     cg_ident(g, st->fields[f].name));
         fprintf(g->out, "} tp_%s;\n", st->name);
     }
-    for (int i = 0; i < g->nens; i++) {
-        EnDecl *en = g->ens[i];
-        fprintf(g->out, "typedef struct tp_%s {\n    int32_t tp_tag;\n    union {\n", en->name);
-        bool any_payload = false;
-        for (int v = 0; v < en->nvariants; v++) {
-            Variant *va = &en->variants[v];
-            if (va->npayloads == 0) continue;
-            any_payload = true;
-            const char *vn = cg_ident(g, va->name);
-            if (va->npayloads == 1) {
-                fprintf(g->out, "        %s %s;\n",
-                        tp_type_name(g, va->payloads[0].ty, va->payloads[0].tname), vn);
-            } else {
-                fprintf(g->out, "        struct {\n");
-                for (int k = 0; k < va->npayloads; k++)
-                    fprintf(g->out, "            %s tp_p%d;\n",
-                            tp_type_name(g, va->payloads[k].ty, va->payloads[k].tname), k);
-                fprintf(g->out, "        } %s;\n", vn);
-            }
-        }
-        if (!any_payload) fputs("        char tp_pad;\n", g->out);
-        fprintf(g->out, "    } tp_as;\n} tp_%s;\n", en->name);
-    }
+    for (int i = 0; i < g->nens; i++)
+        emit_enum_struct(g, g->ens[i]);
+    /* built-in opt/result shapes last: payloads are earlier-declared composites */
+    for (int i = 0; i < anon_count(); i++)
+        emit_enum_struct(g, anon_at(i));
 }
 
 /* ---------------- expression emission ---------------- */
@@ -509,6 +518,21 @@ static void emit_expr(Cg *g, Expr *e) {
 
 /* ---------------- statements ---------------- */
 
+/* `?` spread at statement level (T4): temp + tag guard; failures propagate by
+ * returning the very same tagged struct the caller expects - zero runtime
+ * machinery beyond the C return. success path reads the first payload member. */
+static void emit_spread_head(Cg *g, Expr *sp, const char **member) {
+    int n = g->nspread++;
+    Expr *op = sp->operand;
+    EnDecl *en = cg_enum(g, op->tname);
+    *member = en && en->variants[0].npayloads == 1 ? cg_ident(g, en->variants[0].name) : "tp_pad";
+    /* no enclosing C block: the temp and the bound value must stay alive in
+     * the caller's body scope; tp_sN names are unique per fn gen */
+    fprintf(g->out, "%s tp_s%d = ", tp_type_name(g, op->ty, op->tname), n);
+    emit_expr(g, op);
+    fprintf(g->out, ";\nif (tp_s%d.tp_tag != 0) return tp_s%d;\n", n, n);
+}
+
 /* assignment targets: bindings and struct field chains */
 static void emit_lvalue(Cg *g, Expr *t) {
     if (t->kind == EX_IDENT) fputs(cg_ident(g, t->sval), g->out);
@@ -519,6 +543,14 @@ static void emit_lvalue(Cg *g, Expr *t) {
 static void emit_stmt(Cg *g, Stmt *s) {
     switch (s->kind) {
     case ST_LET: {
+        if (s->init && s->init->kind == EX_SPREAD && s->init->operand) {
+            const char *m;
+            emit_spread_head(g, s->init, &m);
+            int n = g->nspread - 1;
+            fprintf(g->out, "%s %s = tp_s%d.tp_as.%s;\n",
+                    tp_type_name(g, s->ty, s->tname), cg_ident(g, s->name), n, m);
+            break;
+        }
         bool hasinit = s->init != NULL;
         const char *ty = tp_type_name(g, s->ty, s->tname);
         if (!hasinit) {
@@ -528,7 +560,8 @@ static void emit_stmt(Cg *g, Stmt *s) {
             case TY_F64: zero = "0.0"; break;
             case TY_BOOL: zero = "false"; break;
             case TY_STR: zero = "\"\""; break;
-            case TY_STRUCT: case TY_ENUM: zero = "{0}"; break;
+            case TY_STRUCT: case TY_ENUM: case TY_OPT: case TY_RESULT:
+                zero = "{0}"; break;
             default: zero = "0"; break;
             }
             fprintf(g->out, "%s %s = %s;\n", ty, cg_ident(g, s->name), zero);
@@ -542,6 +575,14 @@ static void emit_stmt(Cg *g, Stmt *s) {
     case ST_ASSIGN: {
         Expr *t = s->target;
         if (s->aop == TK_ASSIGN) {
+            if (s->value->kind == EX_SPREAD && s->value->operand) {
+                const char *m;
+                emit_spread_head(g, s->value, &m);
+                int n = g->nspread - 1;
+                emit_lvalue(g, t);
+                fprintf(g->out, " = tp_s%d.tp_as.%s;\n", n, m);
+                break;
+            }
             emit_lvalue(g, t);
             fputs(" = ", g->out);
             emit_expr(g, s->value);
@@ -570,6 +611,15 @@ static void emit_stmt(Cg *g, Stmt *s) {
         break;
     }
     case ST_RETURN:
+        if (s->value && s->value->kind == EX_SPREAD && s->value->operand) {
+            /* on ok the struct is already the caller's ret shape; on err it
+             * propagates - returning the temp covers both */
+            const char *m;
+            emit_spread_head(g, s->value, &m);
+            int n = g->nspread - 1;
+            fprintf(g->out, "return tp_s%d;\n", n);
+            break;
+        }
         if (s->value) {
             fputs("return ", g->out);
             emit_expr(g, s->value);
@@ -608,6 +658,13 @@ static void emit_stmt(Cg *g, Stmt *s) {
         fputs("}\n", g->out);
         break;
     case ST_EXPR:
+        if (s->value->kind == EX_SPREAD && s->value->operand) {
+            /* payload unused: the guard is the whole point */
+            const char *m;
+            emit_spread_head(g, s->value, &m);
+            fputs(";\n", g->out);
+            break;
+        }
         emit_expr(g, s->value);
         fputs(";\n", g->out);
         break;
@@ -620,11 +677,12 @@ static void emit_stmt(Cg *g, Stmt *s) {
         /* scrutinee into a temp (payload binds re-read it), switch on tag */
         int mi = g->nmatch++;
         Ty st = s->cond->ty;
+        bool tagged = st == TY_ENUM || st == TY_OPT || st == TY_RESULT;
         fputs("{\n", g->out);
-        fprintf(g->out, "%s tp_m%d = ", st == TY_ENUM ? tp_type_name(g, st, s->cond->tname)
+        fprintf(g->out, "%s tp_m%d = ", tagged ? tp_type_name(g, st, s->cond->tname)
                 : ty_cname(st), mi);
         emit_expr(g, s->cond);
-        fprintf(g->out, ";\nswitch (tp_m%d%s) {\n", mi, st == TY_ENUM ? ".tp_tag" : "");
+        fprintf(g->out, ";\nswitch (tp_m%d%s) {\n", mi, tagged ? ".tp_tag" : "");
         MatchArm *wild = NULL;
         for (int a = 0; a < s->narms; a++) {
             MatchArm *arm = s->arms[a];
@@ -713,7 +771,8 @@ static void emit_fn(Cg *g, FnDecl *fn) {
         else if (fn->ret == TY_F64) fputs("return 0.0;\n", g->out);
         else if (fn->ret == TY_BOOL) fputs("return false;\n", g->out);
         else if (fn->ret == TY_STR) fputs("return \"\";\n", g->out);
-        else if (fn->ret == TY_STRUCT || fn->ret == TY_ENUM)
+        else if (fn->ret == TY_STRUCT || fn->ret == TY_ENUM ||
+                 fn->ret == TY_OPT || fn->ret == TY_RESULT)
             fprintf(g->out, "return (tp_%s){0};\n", fn->retname ? fn->retname : "TpType");
         else fprintf(g->out, "return 0;\n");
     }

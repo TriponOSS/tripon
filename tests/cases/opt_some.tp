@@ -1,0 +1,31 @@
+use tier core;
+
+// T3: opt<i32> - constructors, match, ?-propagation inside an opt-returning fn.
+
+fn find(x: i32) -> opt<i32> {
+    if x > 0 { return some(x); }
+    return none;
+}
+
+fn bump(x: i32) -> opt<i32> {
+    let v = find(x)?;      // none propagates out of the opt-returning fn
+    return some(v + 1);
+}
+
+fn show(o: opt<i32>) {
+    match o {
+        some(v) => { print_i32(v); }
+        none => { print_str("none"); }
+    }
+}
+
+fn main() -> i32 {
+    show(bump(5));         // some path: 6
+    show(bump(-3));        // none path
+    show(find(-1));        // none, no spread
+    let d: opt<i32> = none;
+    show(d);               // typed bare none
+    let e: opt<i32> = some(9);
+    show(e);               // typed some
+    return 0;
+}

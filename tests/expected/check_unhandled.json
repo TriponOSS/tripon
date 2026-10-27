@@ -1,0 +1,4 @@
+[
+  { "code": "E0205", "kind": "error", "name": "unhandled-result", "file": "tests/cases/check_unhandled.tp", "line": 12, "col": 5, "len": 4, "msg": "result<i32, str> value evaluated and dropped", "hint": "bind it (let r = expr;) then spread with ? or match on it explicitly" },
+  { "code": "E0205", "kind": "error", "name": "unhandled-result", "file": "tests/cases/check_unhandled.tp", "line": 13, "col": 5, "len": 5, "msg": "result<i32, str> value evaluated and dropped", "hint": "bind it (let r = expr;) then spread with ? or match on it explicitly" }
+]

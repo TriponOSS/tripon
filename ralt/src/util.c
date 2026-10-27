@@ -54,13 +54,13 @@ void vec_push_ptr(VecPtr *v, void *p) {
 static const char *TY_NAMES[] = {
     "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
     "isize", "usize", "f32", "f64", "bool", "str", "()",
-    "struct", "enum", "typedef", "?",
+    "struct", "enum", "typedef", "?", "opt", "result",
 };
 static const char *TY_CNAMES[] = {
     "int8_t", "int16_t", "int32_t", "int64_t",
     "uint8_t", "uint16_t", "uint32_t", "uint64_t",
     "intptr_t", "uintptr_t", "float", "double", "bool", "const char *", "void",
-    "?struct", "?enum", "?typedef", "int32_t",
+    "?struct", "?enum", "?typedef", "int32_t", "?opt", "?result",
 };
 
 const char *ty_name(Ty t) { return TY_NAMES[t]; }

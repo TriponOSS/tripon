@@ -1,0 +1,4 @@
+[
+  { "code": "E0205", "kind": "error", "name": "unhandled-result", "file": "tests/cases/check_spread.tp", "line": 8, "col": 13, "len": 4, "msg": "'?' inside a fn returning i32 cannot propagate; match it or return result<i32, str>", "hint": "make this fn return the same opt/result shape to use ? here" },
+  { "code": "E0205", "kind": "error", "name": "unhandled-result", "file": "tests/cases/check_spread.tp", "line": 13, "col": 13, "len": 4, "msg": "'?' inside a fn returning str cannot propagate; match it or return result<i32, str>", "hint": "make this fn return the same opt/result shape to use ? here" }
+]

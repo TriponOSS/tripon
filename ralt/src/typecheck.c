@@ -2,6 +2,53 @@
  * Strict: no implicit conversions of any kind, no null paths, errors as values. */
 #include "common.h"
 
+/* ---------------- anon opt/result enum registry (T3/T4 desugar) ---------------- */
+
+#define ANON_MAX 128
+static EnDecl *g_anons[ANON_MAX];
+static int g_nanons = 0;
+
+EnDecl *anon_find(const char *name) {
+    for (int i = 0; i < g_nanons; i++)
+        if (strcmp(g_anons[i]->name, name) == 0) return g_anons[i];
+    return NULL;
+}
+
+EnDecl *anon_at(int i) { return i >= 0 && i < g_nanons ? g_anons[i] : NULL; }
+int anon_count(void) { return g_nanons; }
+
+/* fixed shape: variants[0] = some/ok (always 1 payload = T),
+ * variants[1] = none (0 payloads) / err (1 payload = E). Tag ids:
+ * some=0/none=1, ok=0/err=1 so match/`?` reuse the enum machinery as-is. */
+EnDecl *anon_declare(const char *name, Payload *pls, int npl, Span sp) {
+    EnDecl *ex = anon_find(name);
+    if (ex) return ex;
+    if (g_nanons == ANON_MAX) {
+        diag(sp, E0202, SEV_ERROR, "too many distinct opt/result instantiations in this unit",
+             "v0 caps anonymous opt/result shapes; refactor the payloads");
+        return NULL;
+    }
+    EnDecl *en = calloc(1, sizeof *en);
+    en->name = name;
+    en->span = sp;
+    en->variants = calloc(2, sizeof(Variant));
+    en->nvariants = 2;
+    en->variants[0].name = npl == 2 ? "ok" : "some";
+    en->variants[0].span = sp;
+    en->variants[1].name = npl == 2 ? "err" : "none";
+    en->variants[1].span = sp;
+    en->variants[0].npayloads = 1;
+    en->variants[0].payloads = calloc(1, sizeof(Payload));
+    en->variants[0].payloads[0] = pls[0];
+    en->variants[1].npayloads = npl == 2 ? 1 : 0;
+    if (npl == 2) {
+        en->variants[1].payloads = calloc(1, sizeof(Payload));
+        en->variants[1].payloads[0] = pls[1];
+    }
+    g_anons[g_nanons++] = en;
+    return en;
+}
+
 /* ---------------- symbol tables ---------------- */
 
 typedef struct {
@@ -28,6 +75,9 @@ typedef struct {
     EnDecl **ens;
     int nens;
     FnDecl *cur_fn;
+    Ty exp_ty;          /* expected-type context for bare ctor resolution */
+    const char *exp_tn;
+    int spread_pos;     /* `?` allowed: let init/expr stmt/assign/return */
 } Ctx;
 
 typedef enum { FOUND = 0, NOTFOUND } Res;
@@ -120,7 +170,7 @@ static StDecl *find_struct(Ctx *c, const char *name) {
 static EnDecl *find_enum(Ctx *c, const char *name) {
     for (int i = 0; i < c->nens; i++)
         if (strcmp(c->ens[i]->name, name) == 0) return c->ens[i];
-    return NULL;
+    return anon_find(name);     /* built-in opt/result shapes */
 }
 
 /* ---------------- type decl prepass (in source order) ---------------- */
@@ -183,17 +233,60 @@ static void prepass_types(Ctx *c, Decl **decls, int ndecls) {
         if (fn->ret == TY_TYPEDEF)
             fn->ret = resolve_tname(c, fn->retname, fn->span);
     }
+    /* anon opt/result payloads resolve like enum payloads; parsed v0 surface
+     * violations (nesting, str-in-opt, void) already carry their parse diag */
+    for (int i = 0; i < g_nanons; i++) {
+        bool is_opt = g_anons[i]->variants[1].npayloads == 0;
+        for (int v = 0; v < g_anons[i]->nvariants; v++)
+            for (int k = 0; k < g_anons[i]->variants[v].npayloads; k++) {
+                Payload *pl = &g_anons[i]->variants[v].payloads[k];
+                if (pl->ty == TY_TYPEDEF)
+                    pl->ty = resolve_tname(c, pl->tname, pl->span);
+                if (pl->ty == TY_UNSET || pl->ty == TY_VOID ||
+                    (pl->ty == TY_STR && is_opt) ||
+                    pl->ty == TY_OPT || pl->ty == TY_RESULT) continue;
+                if (pl->ty == TY_ENUM) {
+                    char msg[220];
+                    snprintf(msg, sizeof msg,
+                             "opt/result payloads v0 take a scalar, str, or struct, not '%s'",
+                             pl->tname ? pl->tname : "?");
+                    diag(pl->span, E0202, SEV_ERROR, msg, "match enums at the use site instead");
+                }
+            }
+    }
 }
 
 /* struct/enum-aware display name and equality */
+static const char *ty_disp(Ty t, const char *tnm);
+
+/* one opt/result display: "opt<i32>" / "result<i32, str>" from the anon name */
+static void tx_disp(char *buf, size_t n, Ty t, const char *tnm) {
+    EnDecl *en = tnm ? anon_find(tnm) : NULL;
+    if (!en) { snprintf(buf, n, "%s", tnm ? tnm : ty_name(t)); return; }
+    const char *pay0 = en->variants[0].npayloads == 1
+        ? ty_disp(en->variants[0].payloads[0].ty, en->variants[0].payloads[0].tname) : "?";
+    if (en->variants[1].npayloads == 0)
+        snprintf(buf, n, "opt<%s>", pay0);
+    else snprintf(buf, n, "result<%s, %s>", pay0,
+                  ty_disp(en->variants[1].payloads[0].ty, en->variants[1].payloads[0].tname));
+}
+
 static const char *ty_disp(Ty t, const char *tnm) {
+    if (t == TY_OPT || t == TY_RESULT) {
+        static char bufs[4][96];
+        static int rot = 0;
+        char *b = bufs[rot++ % 4];
+        tx_disp(b, sizeof bufs[0], t, tnm);
+        return b;
+    }
     if (t == TY_STRUCT || t == TY_ENUM || t == TY_TYPEDEF) return tnm ? tnm : "composite";
     return ty_name(t);
 }
 
 static bool ty_same(Ty a, const char *an, Ty b, const char *bn) {
     if (a != b) return false;
-    if (a == TY_STRUCT || a == TY_ENUM || a == TY_TYPEDEF)
+    if (a == TY_STRUCT || a == TY_ENUM || a == TY_TYPEDEF ||
+        a == TY_OPT || a == TY_RESULT)
         return an && bn && strcmp(an, bn) == 0;
     return true;
 }
@@ -221,6 +314,139 @@ static Ty lit_adopt(Expr *lit, Ty partner) {
     return TY_UNSET;
 }
 
+/* -------- expected-type context + bare ctor plumbing (T3/T4) -------- */
+
+static Ty tc_expr(Ctx *c, Expr *e);
+
+/* tc_expr with the expected type for bare same/none/ok/err construction */
+static Ty tc_expr_w(Ctx *c, Expr *e, Ty want, const char *wtn) {
+    Ty sw = c->exp_ty;
+    const char *sn = c->exp_tn;
+    c->exp_ty = want;
+    c->exp_tn = wtn;
+    Ty t = tc_expr(c, e);
+    c->exp_ty = sw;
+    c->exp_tn = sn;
+    return t;
+}
+
+/* bare opt/result ctors: convert the call/ident into the anon enum's EX_VARIANT
+ * so later passes reuse the plain variant machinery unchanged. */
+static Ty tc_ctor(Ctx *c, Expr *e, const char *vname) {
+    Span sp = e->span;
+    Ty wty = c->exp_ty;
+    const char *wtn = c->exp_tn;
+
+    if (wty != TY_OPT && wty != TY_RESULT) {
+        /* no ctx: only some(x) carries enough info to infer one */
+        if (vname[0] == 'n') {
+            diag(sp, E0202, SEV_ERROR, "bare 'none' has no type context",
+                 "declare the shape first: let x: opt<i32> = none;");
+            e->ty = TY_UNSET;
+            return TY_UNSET;
+        }
+        if (vname[0] != 's') {   /* ok/err never infer: result needs both payload types */
+            diag(sp, E0202, SEV_ERROR, "'ok(v)'/'err(e)' have no type context to aim at",
+                 "declare the shape first: let r: result<i32, str> = ok(v);");
+            for (int k = 0; k < e->nargs; k++) tc_expr(c, e->args[k]);
+            e->ty = TY_UNSET;
+            return TY_UNSET;
+        }
+        if (e->nargs != 1) {
+            diag(sp, E0202, SEV_ERROR, "'some' in no context needs exactly one payload value",
+                 "declare the shape first: let x: opt<i32> = some(5);");
+            for (int k = 0; k < e->nargs; k++) tc_expr(c, e->args[k]);
+            e->ty = TY_UNSET;
+            return TY_UNSET;
+        }
+        Ty at = tc_expr(c, e->args[0]);
+        if (at == TY_UNSET) { e->ty = TY_UNSET; return TY_UNSET; }
+        if (at == TY_OPT || at == TY_RESULT) {
+            diag(e->args[0]->span, E0202, SEV_ERROR, "opt cannot nest v0 (same for result)",
+                 "flatten the shape: carry nest-shaped data in a struct");
+            e->ty = TY_UNSET;
+            return TY_UNSET;
+        }
+        if (!(ty_is_num(at) || at == TY_BOOL || at == TY_STRUCT || at == TY_STR)) {
+            diag(e->args[0]->span, E0202, SEV_ERROR,
+                 "cannot infer an opt payload from this value",
+                 "declare the target type, e.g. let x: opt<i32> = some(v);");
+            e->ty = TY_UNSET;
+            return TY_UNSET;
+        }
+        if (at == TY_STR) {
+            diag(e->args[0]->span, E0202, SEV_ERROR, "opt<str> is not v0: opt carries a scalar or struct",
+                 "hold strings on a struct or return result<i32, str> for failures");
+            e->ty = TY_UNSET;
+            return TY_UNSET;
+        }
+        const char *pcan = at == TY_STRUCT ? e->args[0]->tname : ty_name(at);
+        char buf[192];
+        snprintf(buf, sizeof buf, "opt_%s", pcan ? pcan : "?");
+        const char *name = arena_dupstr(c->a, buf, strlen(buf));
+        Payload pl;
+        pl.ty = at;
+        pl.tname = e->args[0]->tname;
+        pl.span = e->args[0]->span;
+        anon_declare(name, &pl, 1, sp);
+        e->kind = EX_VARIANT;
+        e->vname = "some";
+        e->sval = name;
+        e->bare_ctor = true;
+        e->ty = TY_OPT;
+        e->tname = name;
+        return TY_OPT;
+    }
+
+    /* ctx known: aim the ctor at that opt/result, reuse variant checks */
+    EnDecl *en = find_enum(c, wtn);
+    int vi = -1;
+    if (en) {
+        if (strcmp(en->variants[0].name, vname) == 0) vi = 0;
+        else if (strcmp(en->variants[1].name, vname) == 0) vi = 1;
+    }
+    if (!en || vi < 0) {
+        char msg[240];
+        const char *a = en ? en->variants[0].name : "some";
+        const char *b = en ? en->variants[1].name : "none";
+        snprintf(msg, sizeof msg, "'%s' does not construct %s (try %s or %s)",
+                 vname, ty_disp(wty, wtn), a, b);
+        diag(sp, E0202, SEV_ERROR, msg, "some/none build opt values, ok/err build result values");
+        e->ty = TY_UNSET;
+        return TY_UNSET;
+    }
+    Variant *v = &en->variants[vi];
+    if (e->nargs != v->npayloads) {
+        char msg[220];
+        snprintf(msg, sizeof msg, "variant '%s' takes %d payload value(s), got %d",
+                 v->name, v->npayloads, e->nargs);
+        diag(sp, E0202, SEV_ERROR, msg, "match the payload count exactly");
+        for (int k = 0; k < e->nargs; k++) tc_expr(c, e->args[k]);
+        e->ty = TY_UNSET;
+        return TY_UNSET;
+    }
+    for (int k = 0; k < e->nargs; k++) {
+        Ty at = tc_expr_w(c, e->args[k], v->payloads[k].ty, v->payloads[k].tname);
+        if (at == TY_UNSET) continue;
+        if (!ty_same(at, e->args[k]->tname, v->payloads[k].ty, v->payloads[k].tname)) {
+            char msg[260];
+            snprintf(msg, sizeof msg,
+                     "payload of '%s' is %s, got %s; no implicit conversion exists",
+                     v->name, ty_disp(v->payloads[k].ty, v->payloads[k].tname),
+                     ty_disp(at, e->args[k]->tname));
+            diag(e->args[k]->span, E0202, SEV_ERROR, msg,
+                 "types must match exactly; no implicit conversion exists");
+        }
+    }
+    e->kind = EX_VARIANT;
+    e->vname = vname;
+    e->sval = en->name;
+    e->bare_ctor = true;
+    e->ty = wty;
+    e->tname = en->name;
+    return wty;
+}
+
 static Ty tc_expr(Ctx *c, Expr *e) {
     switch (e->kind) {
     case EX_INT: {
@@ -242,6 +468,11 @@ static Ty tc_expr(Ctx *c, Expr *e) {
                     e->is_const_ref = f->locals[i].is_const;
                     return e->ty;
                 }
+        /* bare `none`: the no-payload opt constructor (payload ctors need()) */
+        if (strcmp(e->sval, "none") == 0 && !find_fn(c, "none"))
+            return tc_ctor(c, e, "none");
+        /* reported once at parse; no value, no cascade */
+        if (strcmp(e->sval, "null") == 0) { e->ty = TY_UNSET; return TY_UNSET; }
         char msg[200];
         snprintf(msg, sizeof msg, "unknown identifier '%s' in this scope", e->sval);
         diag(e->span, E0201, SEV_ERROR, msg, "define it, use the right module, or fix spelling");
@@ -250,6 +481,11 @@ static Ty tc_expr(Ctx *c, Expr *e) {
     }
 
     case EX_CALL: {
+        /* bare opt/result ctors win only when no user fn takes the name */
+        const char *nm = e->callee;
+        bool ctor = strcmp(nm, "some") == 0 || strcmp(nm, "none") == 0 ||
+                    strcmp(nm, "ok") == 0 || strcmp(nm, "err") == 0;
+        if (ctor && !find_fn(c, nm)) return tc_ctor(c, e, nm);
         int bret, bargc; Ty barg;
         if (builtin_info(e->callee, &bret, &bargc, &barg)) {
             if (e->nargs != bargc) {
@@ -258,7 +494,7 @@ static Ty tc_expr(Ctx *c, Expr *e) {
                          e->callee, bargc, e->nargs);
                 diag(e->span, E0202, SEV_ERROR, msg, "match the signature exactly");
             } else {
-                Ty at = tc_expr(c, e->args[0]);
+                Ty at = tc_expr_w(c, e->args[0], barg, NULL);
                 /* no cascades: a deeper-reported arg stops here */
                 if (at != TY_UNSET && !ty_same(at, e->args[0]->tname, barg, NULL)) {
                     char msg[240];
@@ -289,7 +525,7 @@ static Ty tc_expr(Ctx *c, Expr *e) {
             return e->ty;
         }
         for (int i = 0; i < e->nargs; i++) {
-            Ty at = tc_expr(c, e->args[i]);
+            Ty at = tc_expr_w(c, e->args[i], fn->params[i].ty, fn->params[i].tname);
             /* no cascades: if the argument already errored deeper, stop here */
             if (at == TY_UNSET || fn->params[i].ty == TY_UNSET) continue;
             if (!ty_same(at, e->args[i]->tname, fn->params[i].ty, fn->params[i].tname)) {
@@ -494,7 +730,7 @@ static Ty tc_expr(Ctx *c, Expr *e) {
                 tc_expr(c, e->args[i]);
                 continue;
             }
-            Ty it = tc_expr(c, e->args[i]);
+            Ty it = tc_expr_w(c, e->args[i], st->fields[idx].ty, st->fields[idx].tname);
             if (it == TY_UNSET) continue;
             Ty fty = st->fields[idx].ty;
             const char *fnm = st->fields[idx].tname;
@@ -546,7 +782,7 @@ static Ty tc_expr(Ctx *c, Expr *e) {
                 diag(e->span, E0202, SEV_ERROR, msg, "match the variant payload types exactly");
             }
             for (int k = 0; k < e->nargs && k < v->npayloads; k++) {
-                Ty at = tc_expr(c, e->args[k]);
+                Ty at = tc_expr_w(c, e->args[k], v->payloads[k].ty, v->payloads[k].tname);
                 if (at == TY_UNSET) continue;
                 if (!ty_same(at, e->args[k]->tname, v->payloads[k].ty, v->payloads[k].tname)) {
                     char msg[260];
@@ -565,6 +801,60 @@ static Ty tc_expr(Ctx *c, Expr *e) {
         diag(e->span, E0201, SEV_ERROR, msg, "check the variant list in the enum decl");
         e->ty = TY_UNSET;
         return TY_UNSET;
+    }
+
+    case EX_SPREAD: {
+        if (!c->spread_pos) {
+            diag(e->operand->span, E0101, SEV_ERROR,
+                 "the '?' spread is statement-level in v0 (let x = e?; e?; return e?;)",
+                 "hoist the wrapped expr into a let, then spread it");
+            tc_expr(c, e->operand);
+            e->ty = TY_UNSET;
+            return TY_UNSET;
+        }
+        Ty bt = tc_expr(c, e->operand);
+        if (bt == TY_UNSET) { e->ty = TY_UNSET; return TY_UNSET; }
+        if (bt != TY_OPT && bt != TY_RESULT) {
+            char msg[220];
+            snprintf(msg, sizeof msg, "'?' spreads opt/result values, got %s",
+                     ty_disp(bt, e->operand->tname));
+            diag(e->operand->span, E0202, SEV_ERROR, msg,
+                 "unwrap with match or make the source opt/result");
+            e->ty = TY_UNSET;
+            return TY_UNSET;
+        }
+        /* propagating out: the fn must return the very same shape */
+        FnDecl *fn = c->cur_fn;
+        Ty rty = fn ? fn->ret : TY_UNSET;
+        if (rty != bt || !ty_same(rty, fn->retname, bt, e->operand->tname)) {
+            /* report, but keep the payload type flowing to kill cascades */
+            EnDecl *en2 = anon_find(e->operand->tname);
+            if (en2 && en2->variants[0].npayloads == 1) {
+                e->ty = en2->variants[0].payloads[0].ty;
+                e->tname = en2->variants[0].payloads[0].tname;
+            }
+            if (rty == TY_OPT || rty == TY_RESULT) {
+                char msg[260];
+                snprintf(msg, sizeof msg, "cannot spread %s out of a fn returning %s",
+                         ty_disp(bt, e->operand->tname), ty_disp(rty, fn->retname));
+                diag(e->operand->span, E0202, SEV_ERROR, msg,
+                     "the failure payload must be the caller's own E/none");
+            } else {
+                char msg[280];
+                snprintf(msg, sizeof msg,
+                         "'?' inside a fn returning %s cannot propagate; match it or return %s",
+                         ty_disp(rty, fn->retname), ty_disp(bt, e->operand->tname));
+                diag(e->operand->span, E0205, SEV_ERROR, msg,
+                     "make this fn return the same opt/result shape to use ? here");
+            }
+            return e->ty;
+        }
+        EnDecl *en = anon_find(e->operand->tname);
+        if (!en || en->variants[0].npayloads != 1) { e->ty = TY_UNSET; return TY_UNSET; }
+        e->ty = en->variants[0].payloads[0].ty;
+        e->tname = en->variants[0].payloads[0].tname;
+        e->lvalue = e->operand->lvalue;
+        return e->ty;
     }
 
     case EX_CAST: {
@@ -614,14 +904,20 @@ static void tc_stmt(Ctx *c, Stmt *s) {
         declared = s->ty;
         if (declared == TY_UNSET) {
             if (s->init) {
+                int was = c->spread_pos;
+                c->spread_pos = 1;
                 declared = tc_expr(c, s->init);
+                c->spread_pos = was;
             } else {
                 diag(s->span, E0101, SEV_ERROR, "binding with no type and no initializer cannot be inferred",
                      "write 'let x: T;' for zero-init or 'let x = expr;'");
                 declared = TY_UNSET;
             }
         } else if (s->init) {
-            Ty it = tc_expr(c, s->init);
+            int was = c->spread_pos;
+            c->spread_pos = 1;
+            Ty it = tc_expr_w(c, s->init, declared, s->tname);
+            c->spread_pos = was;
             if (!ty_same(it, s->init->tname, declared, s->tname)) {
                 char msg[240];
                 snprintf(msg, sizeof msg, "initializer is %s but binding is %s; no implicit conversion exists",
@@ -640,14 +936,18 @@ static void tc_stmt(Ctx *c, Stmt *s) {
         }
         /* write back so codegen emits the inferred type */
         s->ty = declared;
-        if (declared != TY_STRUCT && declared != TY_ENUM) s->tname = NULL;
+        if (declared != TY_STRUCT && declared != TY_ENUM &&
+            declared != TY_OPT && declared != TY_RESULT) s->tname = NULL;
         else if (s->init && !s->tname) s->tname = s->init->tname;
         scope_insert(c, s->name, declared, s->tname, s->is_const, s->span);
         break;
     }
     case ST_ASSIGN: {
         Ty tt = tc_expr(c, s->target);
-        Ty vt = tc_expr(c, s->value);
+        int was = c->spread_pos;
+        c->spread_pos = 1;
+        Ty vt = tc_expr_w(c, s->value, tt, s->target->tname);
+        c->spread_pos = was;
         if (tt == TY_UNSET || vt == TY_UNSET) break;
         if (!s->target->lvalue) {
             diag(s->target->span, E0202, SEV_ERROR, "assignment target must be a binding",
@@ -687,7 +987,15 @@ static void tc_stmt(Ctx *c, Stmt *s) {
     case ST_RETURN: {
         Ty fnret = c->cur_fn ? c->cur_fn->ret : TY_UNSET;
         const char *frn = c->cur_fn ? c->cur_fn->retname : NULL;
-        Ty t = s->value ? tc_expr(c, s->value) : TY_VOID;
+        Ty t;
+        if (s->value) {
+            int was = c->spread_pos;
+            c->spread_pos = 1;
+            t = tc_expr_w(c, s->value, fnret, frn);
+            c->spread_pos = was;
+        } else {
+            t = TY_VOID;
+        }
         if (s->value == NULL && fnret != TY_VOID && fnret != TY_UNSET) {
             diag(s->span, E0202, SEV_ERROR, "return needs a value; the fn returns one",
                  "bare return belongs in () fns");
@@ -699,6 +1007,7 @@ static void tc_stmt(Ctx *c, Stmt *s) {
             break;
         }
         if (s->value != NULL && fnret != TY_UNSET && fnret != TY_VOID &&
+            s->value->kind != EX_SPREAD &&   /* spread errors carry their own diag */
             !ty_same(t, s->value->tname, fnret, frn)) {
             char msg[240];
             snprintf(msg, sizeof msg, "return is %s but fn returns %s; no implicit conversion exists",
@@ -724,8 +1033,18 @@ static void tc_stmt(Ctx *c, Stmt *s) {
         break;
     }
     case ST_EXPR: {
+        int was = c->spread_pos;
+        c->spread_pos = 1;
         Ty t = tc_expr(c, s->value);
-        (void)t;
+        c->spread_pos = was;
+        /* T4: an opt/result evaluated and dropped is the E0205 trigger */
+        if (t == TY_OPT || t == TY_RESULT) {
+            char msg[240];
+            snprintf(msg, sizeof msg, "%s value evaluated and dropped",
+                     ty_disp(t, s->value->tname));
+            diag(s->value->span, E0205, SEV_ERROR, msg,
+                 "bind it (let r = expr;) then spread with ? or match on it explicitly");
+        }
         break;
     }
     case ST_BLOCK: {
@@ -756,7 +1075,7 @@ static void tc_arm_body(Ctx *c, MatchArm *arm, Variant *v) {
 static void tc_match(Ctx *c, Stmt *s) {
     Ty st = tc_expr(c, s->cond);
     const char *snm = s->cond->tname;
-    bool enum_match = st == TY_ENUM;
+    bool enum_match = st == TY_ENUM || st == TY_OPT || st == TY_RESULT;
     bool num_match = ty_is_int(st) || st == TY_BOOL;
     if (!enum_match && !num_match) {
         char msg[240];
