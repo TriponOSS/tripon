@@ -11,10 +11,10 @@ fn main() -> i32 {
     report("shipped: opt/result + ? spread + null (P1.1b)");
     report("shipped: fixed arrays, str index, E9002 (P1.2)");
     report("shipped: *i8 raw pointers for extern islands (T7 fence)");
-    report("shipped: ralt tokens oracle - frozen for the selfhost port");
+    report("shipped: ralt tokens + ralt tree oracles");
     report("suite: 42 checks passing, gcc + clang, deterministic");
-    report("shipped: P3.0 selfhost lexer - matches bootstrap 47/47");
-    report("fixed: codegen else-if chains + || && paren regroup");
-    report("next: P3.1 selfhost parser port");
+    report("shipped: P3.0 lexer + P3.1 parser ports - oracles 47/47, 48/48");
+    report("fixed: else-if chains, || && parens, RETURN tree dump");
+    report("next: P3.2 selfhost typechecker port (check --json oracle)");
     return 0;
 }

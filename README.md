@@ -341,10 +341,11 @@ What actually makes Tripon the #1 agent-facing language:
       indexing (E9002/E9004), `*i8` extern-island pointers
 - [x] **P2 — Agent tooling.** fmt/doc/lsp/deps; `ralt tokens` oracle; suite
       42 checks, determinism-green
-- [~] **P3 — Self-host.** P3.0 lexer port done: `selfhost/lexer.tp` replays
-      the bootstrap lexer's token stream across 47 files (frozen oracle test).
-      Next: parser (fmt-verified), then checker — until "Tripon made with
-      Tripon" compiles itself and passes the suite
+- [~] **P3 — Self-host.** P3.0 lexer + P3.1 parser ports done: both replay
+      their bootstrap oracles byte-for-byte (`ralt tokens` 47/47, `ralt tree`
+      48/48 incl. the port itself; frozen oracle tests in tests/selfhost.sh).
+      Next: typechecker port (check --json oracle), then flag day — "Tripon
+      made with Tripon" compiles itself and passes the suite
 - [ ] **P4 — Native x86-64 backend.** drop the C dependence; linear-scan
       register allocation, no SSA issuance overhead
 - [ ] Ideation: package cache with content addressing, tier linter
@@ -358,7 +359,7 @@ Phase detail lives in [PLAN.md](PLAN.md).
 ```
 spec/        grammar.ebnf  tripon.md  errors.csv   ← the language contract (frozen)
 ralt/src/    the bootstrap compiler: 1 new C file per pass, zero deps
-selfhost/    Tripon-in-Tripon: self-host compiler sources (P3, lexer port done)
+selfhost/    Tripon-in-Tripon: self-host sources (lexer + parser ports done)
 stdlib/      tier-managed standard library (grows with P1.2)
 examples/    runnable .tp programs (hello, fib, report, ...)
 tests/       frozen contract: cases + goldens + determinism + deps + selfhost oracle
