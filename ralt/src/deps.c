@@ -13,7 +13,7 @@
 /* ---------------- public prototypes (driver re-declares in common.h) ---------------- */
 
 int deps_manifest_exists(void);
-int deps_init_template(void);
+int deps_init_template(const char *argname);
 int deps_install(const char *target);
 int deps_collect(char ***paths, int *count);
 void deps_free(char ***paths, int count);
@@ -248,30 +248,101 @@ int deps_manifest_exists(void) {
     return stat("ralt.yaml", &st) == 0;
 }
 
-int deps_init_template(void) {
+int deps_init_template(const char *argname) {
+    char cwd[PATHBUF];
     char name[DEP_NAME_MAX];
-    const char *cwd, *base;
+    const char *base;
+    struct stat st;
     FILE *f;
 
-    if (deps_manifest_exists()) {
-        fprintf(stderr, "ralt: ralt.yaml already exists here\n");
-        return 2;
+    if (argname && argname[0]) {
+        /* project name or path: scaffold into ./<argname>/ (created) */
+        const char *base2 = argname + strlen(argname);
+        while (base2 > argname && base2[-1] != '/' && base2[-1] != '\\') base2--;
+        size_t blen = strlen(base2);
+        if (blen == 0 || blen >= DEP_NAME_MAX || strlen(argname) >= 128) {
+            fprintf(stderr, "ralt: init: bad project name\n");
+            return -1;
+        }
+        if (mkdir_p(argname) != 0) {
+            fprintf(stderr, "ralt: init: cannot create %s: %s\n", argname,
+                    strerror(errno));
+            return -1;
+        }
+        if (chdir(argname) != 0) {
+            fprintf(stderr, "ralt: init: cannot enter %s: %s\n", argname,
+                    strerror(errno));
+            return -1;
+        }
+        if (deps_manifest_exists()) {
+            fprintf(stderr, "ralt: ralt.yaml already exists in %s\n", argname);
+            return 2;
+        }
+        snprintf(name, sizeof name, "%s", base2);
+    } else {
+        if (deps_manifest_exists()) {
+            fprintf(stderr, "ralt: ralt.yaml already exists here\n");
+            return 2;
+        }
+        if (!getcwd(cwd, sizeof cwd)) {
+            fprintf(stderr, "ralt: cannot determine current directory\n");
+            return -1;
+        }
+        base = cwd + strlen(cwd);
+        while (base > cwd && base[-1] != '/' && base[-1] != '\\') base--;
+        if (base[0] == 0 || strlen(base) >= DEP_NAME_MAX)
+            snprintf(name, sizeof name, "tripon-app");
+        else
+            snprintf(name, sizeof name, "%s", base);
     }
-    cwd = getcwd(name, sizeof name);
-    if (!cwd) {
-        fprintf(stderr, "ralt: cannot determine current directory\n");
-        return 1;
+
+    if (mkdir("src", 0777) != 0 && errno != EEXIST) {
+        fprintf(stderr, "ralt: init: cannot create src/: %s\n", strerror(errno));
+            return -1;
     }
-    base = name + strlen(name);
-    while (base > name && base[-1] != '/' && base[-1] != '\\') base--;
+    if (stat("src/main.tp", &st) == 0) {
+        fprintf(stderr, "ralt: src/main.tp already exists, keeping it\n");
+    } else {
+        f = fopen("src/main.tp", "w");
+        if (!f) {
+            fprintf(stderr, "ralt: init: cannot write src/main.tp: %s\n",
+                    strerror(errno));
+            return -1;
+        }
+        fprintf(f,
+                "use tier core;\n"
+                "\n"
+                "extern \"C\" { fn puts(p: str) -> i32; }\n"
+                "\n"
+                "// %s - a Tripon program (.tp)\n"
+                "fn main() -> i32 {\n"
+                "    puts(\"hello, tripon\");\n"
+                "    return 0;\n"
+                "}\n",
+                name);
+        fclose(f);
+    }
+
     f = fopen("ralt.yaml", "w");
     if (!f) {
         fprintf(stderr, "ralt: cannot write ralt.yaml: %s\n", strerror(errno));
-        return 1;
+        return -1;
     }
-    fprintf(f, "name: %s\nversion: 0.1.0\ndeps:\n", base);
+    fprintf(f,
+            "name: %s\n"
+            "version: 0.1.0\n"
+            "deps:\n",
+            name);
     fclose(f);
-    return 0;
+
+    if (stat(".gitignore", &st) != 0) {
+        f = fopen(".gitignore", "w");
+        if (f) {
+            fputs("build/\n*.out\n", f);
+            fclose(f);
+        }
+    }
+    return 1;
 }
 
 /* ---------------- public: install ---------------- */

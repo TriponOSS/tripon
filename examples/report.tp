@@ -15,6 +15,9 @@ fn main() -> i32 {
     report("suite: 42 checks passing, gcc + clang, deterministic");
     report("shipped: P3.0 lexer + P3.1 parser ports - oracles 47/47, 48/48");
     report("fixed: else-if chains, || && parens, RETURN tree dump");
-    report("next: P3.2 selfhost typechecker port (check --json oracle)");
+    report("shipped: P4.0 --backend seam, P4.1 native scalars, P4.2 floats");
+    report("native: 15 corpus cases byte-parity, traps E9001-E9004 included");
+    report("shipped: ralt init scaffold (ralt.yaml + src/main.tp + gitignore)");
+    report("next: P4.3 aggregates, P4.4 native test slice, P3.2 typechecker");
     return 0;
 }

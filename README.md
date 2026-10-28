@@ -3,8 +3,8 @@
 ![ci](https://github.com/TriponOSS/tripon/actions/workflows/ci.yml/badge.svg)
 ![license MIT](https://img.shields.io/badge/license-MIT-green)
 ![spec v0](https://img.shields.io/badge/spec-v0.0-blue)
-![phase](https://img.shields.io/badge/phase-P3%20in%20progress-orange)
-![backend](https://img.shields.io/badge/codegen-C99-informational)
+![phase](https://img.shields.io/badge/phase-P4%20native%20backend%20in%20progress-orange)
+![backend](https://img.shields.io/badge/codegen-C99%20%2B%20x86%2D64-informational)
 
 **A robust compiled language for low-resource systems — and the most
 AI-agent-friendly one in existence.**
@@ -59,8 +59,10 @@ Real constraints produce real languages:
    surface carries zero new-keyword retraining. Type-safety without exotic
    syntax. One grammar file with no macros, no overloading, no feature soup.
 
-Tripon is compiled to C99 today (targeting a native backend thereafter); any
-C toolchain can consume its output, including tiny compilers like tcc.
+Tripon is compiled to C99 by default; since P4.1 the toolchain also emits
+native x86-64 assembly directly (`--backend cc` loops a cc pass, no C step) -
+same programs, same traps, byte-parity output. Any C toolchain can consume
+the portable path, including tiny compilers like tcc.
 
 ---
 
@@ -80,6 +82,8 @@ Run programs:
 ```sh
 ./build/ralt run examples/hello.tp
 ./build/ralt check examples/fib.tp --json   # the full diagnostic contract
+ralt init my-app                            # scaffold ralt.yaml + src/main.tp
+./build/ralt run my-app/src/main.tp --backend cc   # native x86-64 path
 ```
 
 ---
@@ -246,12 +250,12 @@ Compilers are personal only to theirs humans; Tripon's is not.
 
 | command | what it does |
 |---|---|
-| `ralt build <file.tp>` [-o out] [-O fast] [-fast] | emit C99 → cc pipeline → executable (or `-O fast` optim passes) |
+| `ralt build <file.tp>` [-o out] [-O fast] [-fast] | emit C99 → cc pipeline → executable (or `-O fast` optim passes); `--backend cc` emits x86-64 asm directly |
 | `ralt run <file.tp> [args...]` | build + execute in one ms |
 | `ralt check <file.tp> [--json]` | full typecheck, human or machine format |
 | `ralt emit --c <file.tp>` | stop after codegen, emit the .c |
 | `ralt explain <code>` | any error code expanded, e.g. `E0202` |
-| `ralt init` | scaffold `ralt.yaml` |
+| `ralt init [name]` | scaffold a full project: `ralt.yaml` + `src/main.tp` + `.gitignore` |
 | `ralt install <name\|url\|dir>` | resolve/refresh a dependency |
 | `ralt deps` | list collected dep sources |
 | `ralt fmt <file.tp>` | canonical layout — agents can show diffs instead of guessing |
@@ -346,8 +350,12 @@ What actually makes Tripon the #1 agent-facing language:
       48/48 incl. the port itself; frozen oracle tests in tests/selfhost.sh).
       Next: typechecker port (check --json oracle), then flag day — "Tripon
       made with Tripon" compiles itself and passes the suite
-- [ ] **P4 — Native x86-64 backend.** drop the C dependence; linear-scan
-      register allocation, no SSA issuance overhead
+- [~] **P4 — Native x86-64 backend.** `run` with `--backend cc` (or env
+      `TP_BACKEND=cc`) loops assembles the .s directly via cc, no C emitted -
+      scalars (P4.1) and floats (P4.2) are at byte-parity with the C backend,
+      incl. all no-UB traps E9001-E9004 and `-fast` semantics; P4.1 shared TAC
+      + linear-scan allocation. Next: P4.3 aggregates (arrays, structs,
+      enums/match, opt/result), P4.4 native test slice
 - [ ] Ideation: package cache with content addressing, tier linter
 
 Phase detail lives in [PLAN.md](PLAN.md).
@@ -379,8 +387,10 @@ bench/       builder benchmarks → README numbers
 
 ## FAQ
 
-**Why compile to C99?** Portability + free optimization from real C compilers,
-and lets tcc-class builders take the output today. Native backend comes in P4.
+**Why still compile to C99 by default?** Portability + free optimization
+from real C compilers, and lets tcc-class builders take the output today.
+The native x86-64 backend (P4) removes the C step when you don't need it;
+both paths are held to the same frozen trap + oracle contracts in CI.
 
 **Is Tripon `undefined behavior anywhere?`** No — see [No UB, by
 construction](#no-ub-by-construction).

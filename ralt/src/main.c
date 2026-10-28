@@ -13,7 +13,7 @@ static void usage(void) {
         "  ralt check <file.tp> [--json]                   typecheck with diagnostics\n"
         "  ralt emit  --c file.tp -o out.c                 stop after C codegen\n"
         "  ralt explain <code>                             e.g. E0202\n"
-        "  ralt init                                       create ./ralt.yaml\n"
+        "  ralt init  [name]                              scaffold a .tp project (or ./name/)\n"
         "  ralt install <name|url|dir>                     resolve/install a dep\n"
         "  ralt deps                                       list collected dep files\n"
         "  ralt fmt <file.tp>                              print canonical form\n"
@@ -157,10 +157,12 @@ int main(int argc, char **argv) {
 
     /* manifest commands: files not required */
     if (strcmp(cmd, "init") == 0) {
-        int rc = deps_init_template();
+        const char *argname = argc > 2 ? argv[2] : NULL;
+        int rc = deps_init_template(argname);
         if (rc == 2) { fprintf(stderr, "ralt: ralt.yaml already exists here\n"); return 2; }
-        if (rc != 0) { fprintf(stderr, "ralt: cannot write ralt.yaml\n"); return 1; }
-        fputs("-> created ralt.yaml (add deps under the deps: key)\n", stdout);
+        if (rc < 0) { fprintf(stderr, "ralt: init failed\n"); return 1; }
+        printf("-> scaffolded %s (ralt.yaml, src/main.tp)\n", argname ? argname : "here");
+        printf("-> next: ralt run src/main.tp\n");
         return 0;
     }
     if (strcmp(cmd, "install") == 0) {

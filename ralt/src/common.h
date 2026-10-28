@@ -63,7 +63,7 @@ void diag_expected(Span sp, const char *what, const char *got); /* util.c */
 
 /* deps.c - ralt.yaml manifest + dependency collection */
 int  deps_manifest_exists(void);
-int  deps_init_template(void);
+int  deps_init_template(const char *argname);   /* >0 scaffolded, 2 exists, -1 fail */
 int  deps_install(const char *target);
 int  deps_collect(char ***paths, int *count);
 void deps_free(char ***paths, int count);

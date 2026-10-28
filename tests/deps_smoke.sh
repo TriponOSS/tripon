@@ -14,7 +14,7 @@ cat >"$TM" <<'EOF'
 #include "common.h"
 #include <string.h>
 int deps_manifest_exists(void);
-int deps_init_template(void);
+int deps_init_template(const char *);
 int deps_collect(char ***paths, int *count);
 void deps_free(char ***paths, int count);
 int main(int argc, char **argv) {
@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (strcmp(argv[1], "init") == 0) {
-        int r = deps_init_template();
+        int r = deps_init_template(NULL);
         printf("init=%d\n", r);
         return 0;
     }
@@ -57,7 +57,7 @@ printf 'fn main() -> i32 { return 0; }\n' > "$TD/proj/main.tp"
 # --- template init in a fresh dir ---
 mkdir -p "$TD/fresh"
 out="$(cd "$TD/fresh" && "$BIN" init)" || fail "init crashed: $out"
-[ "$(echo "$out" | tail -1)" = "init=0" ] || fail "init fresh should be 0, got $out"
+[ "$(echo "$out" | tail -1)" = "init=1" ] || fail "init fresh should be 1, got $out"
 [ -f "$TD/fresh/ralt.yaml" ] || fail "template not written"
 out="$(cd "$TD/fresh" && "$BIN" init)"
 [ "$(echo "$out" | tail -1)" = "init=2" ] || fail "init overwrite should be 2, got $out"
