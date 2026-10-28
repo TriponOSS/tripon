@@ -85,126 +85,103 @@ fn put_i32(v: i32) -> () {
 // scopes NSO/CSO + SPAR/SLO0/SNLO + flat locals NLO + LON/LOT/LTN/LIC/LSO,
 // checker ctx: EXY/EXP_TN ctx (EXY/ETN), SPP = spread allowed, CFN cur fn,
 // result threading: LTY (last ty), LXX (last expr id), LSS (last stmt id), NERR.
+// struct grammar: NTY/TN: 0 i8 1 i16 2 i32 3 i64 4 u8 5 u16 6 u32 7 u64
+// 8 isize 9 usize 10 f32 11 f64 12 bool 13 str 14 unit 15..;
+// 15 = nullptr, 17 = tnames, 19 opt, 20 result, 21 array, 22 ptr8.
 struct P {
     src: str; n: i32; pos: i32; line: i32; col: i32;
     tk: i32; ts: i32; tl: i32; tline: i32; tcol: i32;
     ival: i64;
     rga: i32; rgb: i32;
+    ty: i32; tns: i32; tnl: i32;
+    tn: i32; LI: i32; X0L: i32; X0C: i32;
     pln: i32; pcl: i32; plg: i32;
     si: i32; na: i32; ap: i32;
 
     nss: i32;
-    s0: [4096]i32; s1: [4096]i32;
-    pool: [16384]u8; pl0: i32;
-    b: [240]u8; bn: i32;
+    s0: [2048]i32; s1: [2048]i32;
+    pool: [8192]u8; pl0: i32;
+    b: [512]u8; bn: i32;
 
     nd: i32;
-    dcode: [64]i32; dsev: [64]i32;
-    dln: [64]i32; dcl: [64]i32; dg: [64]i32;
-    ms: [64]i32; ml: [64]i32; ho: [64]i32; hl: [64]i32;
+    dcode: [24]i32; dsev: [24]i32;
+    dln: [24]i32; dcl: [24]i32; dg: [24]i32;
+    ms: [24]i32; ml: [24]i32; ho: [24]i32; hl: [24]i32;
 
-    nex: i32;
-    NK: [4096]i32; NTY: [4096]i32; NTN: [4096]i32;
-    LN: [4096]i32; CL: [4096]i32; LG: [4096]i32;
-    LV: [4096]i32; IC: [4096]i32;
-    IV: [4096]i32;
-    BV: [4096]i32;
-    OP: [4096]i32;
-    LX: [4096]i32; RX: [4096]i32;
-    UN: [4096]i32; OPD: [4096]i32;
-    SV: [4096]i32;
-    NA: [4096]i32; AXp: [4096]i32;
-    AX: [8192]i32;
-    INM: [8192]i32;
-    BAS: [4096]i32; IDX: [4096]i32;
-    BRC: [4096]i32;
-
-    nST: i32;
-    SK: [2048]i32;
-    SLN: [2048]i32; SCL: [2048]i32; SLG: [2048]i32;
-    SNM: [2048]i32; STY: [2048]i32; STNXT: [2048]i32;
-    SIN: [2048]i32; SVL: [2048]i32; SCN: [2048]i32;
-    SEL: [2048]i32; SAO: [2048]i32; SIC: [2048]i32;
-    SBP: [2048]i32; SBPn: [2048]i32;
-    BO: [8192]i32;
-
-    nAM: i32;
-    PK: [256]i32;
-    ALN: [256]i32; ACL: [256]i32; ALG: [256]i32;
-    AIV: [256]i32;
-    ABV: [256]i32;
-    AEN: [256]i32; AVN: [256]i32;
-    ABP: [256]i32; ABQ: [256]i32;
-    ABO: [2048]i32;
-    BYP: [256]i32; BYQ: [256]i32;
-    BYO: [2048]i32;
-
+    // fns (signature registry built in pass A; pass B walks bodies)
     NF: i32;
-    FN: [64]i32; FE: [64]i32;
+    FN: [64]i32;             // name seg
     FLN: [64]i32; FCL: [64]i32; FLG: [64]i32;
-    FRT: [64]i32; FRTN: [64]i32;
-    FPP: [64]i32; FPPn: [64]i32;
-    FOBR: [64]i32; FBN: [64]i32;
+    FRT: [64]i32; FRTN: [64]i32;  // ret ty + tname seg
+    FPP: [64]i32; FPPn: [64]i32;  // param base + count into NP
+    FBN: [64]i32; FBE: [64]i32;   // body token span (byte range)
+    FSP: [64]i32;                 // spans line for reparse
 
     NP: i32;
-    PNN: [256]i32; PTY: [256]i32; PTN: [256]i32;
-    PPLN: [256]i32; PPCL: [256]i32; PPLG: [256]i32;
+    PNN: [128]i32; PTY: [128]i32; PTN: [128]i32;
+    PPLN: [128]i32; PPCL: [128]i32; PPLG: [128]i32;
 
+    // structs
     NSD: i32;
-    SDN: [64]i32;
-    DSL: [64]i32; DCL: [64]i32; DG_: [64]i32;
-    SFSP: [64]i32; SFSC: [64]i32;
+    SDN: [32]i32;
+    DSL: [32]i32; DCL: [32]i32; DG_: [32]i32;
+    SFSP: [32]i32; SFSC: [32]i32;
+    nBF: i32;
+    BF: [256]i32;  // owner struct id
+    BFN: [256]i32; // field name seg
+    BFT: [256]i32; // field ty
+    BFTN: [256]i32;// field tname seg
 
-    NFF: i32;
-    FFN: [256]i32; FTYY: [256]i32; FTTN: [256]i32;
-    FFLN: [256]i32; FFCL: [256]i32; FFLG: [256]i32;
-
+    // enums
     NEN: i32;
-    EMN: [64]i32;
-    ELN: [64]i32; ECL: [64]i32; ELG: [64]i32;
-    EVSEG: [64]i32; EVNN: [64]i32;
-
+    EMN: [32]i32;
+    ELN: [32]i32; ECL: [32]i32; ELG: [32]i32;
+    EVSEG: [32]i32; EVNN: [32]i32;
     NVS: i32;
     VNN: [128]i32;
     VPSEG: [128]i32; VQN: [128]i32;
     VLN: [128]i32; VCOL: [128]i32; VLG: [128]i32;
 
-    NPQ: i32;
-    PQY: [256]i32; PQN2: [256]i32;
-    PQLN: [256]i32; PQCL: [256]i32; PQLG: [256]i32;
-
-    NANM: i32;
-    ANN: [128]i32;
-    A0Y: [128]i32; A0T: [128]i32;
-    A1Y: [128]i32; A1T: [128]i32;
-    ASL: [128]i32;
-
-    NSO: i32;
-    CSO: i32;
-    SPAR: [64]i32; SLO0: [64]i32; SNLO: [64]i32;
+    // locals (per-fn scope walk, pass B)
     NLO: i32;
-    LON: [1024]i32; LOT: [1024]i32; LTN: [1024]i32;
-    LIC: [1024]i32; LSO: [1024]i32;
+    LON: [256]i32; LOT: [256]i32; LTN: [256]i32;
+    LIC: [256]i32; LSP: [256]i32; LSO: [256]i32;
+    NSO: i32;
+    SLO0: [128]i32; SNLO: [128]i32;
 
-    EXY: i32; ETN: i32;
-    SPP: i32;
+    // arrays (registry filled by parse for [N]T)
+    NAR: i32;
+    ARN: [64]i32;   // tname seg
+    ARLEN: [64]i64;
+    ARTY: [64]i32;  // elem ty
+    ARTN: [64]i32;  // elem tname seg
+
+    // anon (opt/result) registry
+    NNA: i32;
+    ANN: [64]i32;    // name seg like "opt_i32"
+    A0Y: [64]i32; A0T: [64]i32;
+    A1Y: [64]i32; A1T: [64]i32;
+    ASL: [64]i32;
+
+    // tc ctx: want-ty flow + fn ctx + spread allowance
+    expY: i32; expN: i32; SPP: i32;
     CFN: i32;
-    LTY: i32; LXX: i32; LSS: i32;
+    LTY: i32; LTX: i32; LLI: i32; LIV: i64;
+    NBI: i32; BIN: [8]i32; BIT: [8]i32; BIR: [8]i32;
     NER: i32;
 }
 
-// pool + msg byte primitives ------------------------------------------------
+// pool + msg byte primitives
 
-// push one byte into the pool (pool grows)
 fn ppb(m: P, b: i32) -> P {
-    if m.pl0 < 16384 {
+    if m.pl0 < 8192 {
         m.pool[m.pl0] = cast<u8>(b);
         m.pl0 = m.pl0 + 1;
     }
     return m;
 }
 
-// append to the message scratch buffer (m.b grows; returns p)
+// append one byte to the msg scratch buffer
 fn cpc(m: P, b: i32) -> P {
     if m.bn < 240 {
         m.b[m.bn] = cast<u8>(b);
@@ -213,7 +190,6 @@ fn cpc(m: P, b: i32) -> P {
     return m;
 }
 
-// append a constant literal
 fn cpC(m: P, s: str) -> P {
     let n = len(s);
     let i = 0;
@@ -224,12 +200,11 @@ fn cpC(m: P, s: str) -> P {
     return m;
 }
 
-// append a source slice
+// append a source slice seg by id (s0/s1 range)
 fn cpe(m: P, e: i32) -> P {
     if e >= 0 {
-        let from = m.s0[e];
+        let i = m.s0[e];
         let to = m.s1[e];
-        let i = from;
         while i < to {
             m = cpc(m, at(m.src, i, m.n));
             i = i + 1;
@@ -238,7 +213,7 @@ fn cpe(m: P, e: i32) -> P {
     return m;
 }
 
-// append segment if e >= 0 else "?"
+// slice seg or '?' when e < 0
 fn cpeq(m: P, e: i32) -> P {
     if e >= 0 {
         return cpe(m, e);
@@ -252,18 +227,19 @@ fn mbeg(m: P) -> P {
     return m;
 }
 
-
-// source-slice segment (id into s0/s1 pair slots)
+// source-slice segment id
 fn seg_new(m: P, from: i32, to: i32) -> P {
-    if m.nss < 4096 {
+    m.pln = 0 - 1;
+    if m.nss < 2048 {
         m.s0[m.nss] = from;
         m.s1[m.nss] = to;
+        m.pln = m.nss;
         m.nss = m.nss + 1;
     }
     return m;
 }
 
-// fresh compiler state: field-by-field zero init, defaults inlined
+// fresh state
 fn pboot(p: str, nn: i32) -> P {
     let p0: P;
     p0.src = p;
@@ -271,101 +247,59 @@ fn pboot(p: str, nn: i32) -> P {
     p0.pos = 0;
     p0.line = 1;
     p0.col = 1;
-    p0.tk = 0;
-    p0.ts = 0;
-    p0.tl = 0;
-    p0.tline = 1;
-    p0.tcol = 1;
-    p0.ival = 0;
-    p0.pln = 0; p0.pcl = 0; p0.plg = 0;
-    p0.si = 1; p0.na = 0; p0.ap = 0;
+    p0.si = 1;
     p0.nss = 0;
     p0.pl0 = 0;
     p0.bn = 0;
     p0.nd = 0;
-    p0.nex = 0;
-    p0.nST = 0;
-    p0.nAM = 0;
     p0.NF = 0;
     p0.NP = 0;
     p0.NSD = 0;
-    p0.NFF = 0;
     p0.NEN = 0;
     p0.NVS = 0;
-    p0.NPQ = 0;
-    p0.NANM = 0;
+    p0.nBF = 0;
+    p0.NLO = 0;
     p0.NSO = 0;
-    p0.CSO = -1;
-    p0.EXY = -1; p0.ETN = -1;
+    p0.NAR = 0;
+    p0.NNA = 0;
+    p0.expY = -1;
+    p0.expN = -1;
     p0.SPP = 0;
+    p0.LI = 0;
+    p0.X0L = 1;
+    p0.X0C = 1;
     p0.CFN = -1;
-    p0.LTY = -1; p0.LXX = 0; p0.LSS = 0;
+    p0.LTY = -1;
+    p0.LLI = 0;
     p0.NER = 0;
     return p0;
 }
 
-// ---------------------------------------------------- lexer -------------------------
-// streaming lexer from lex.c: whitespace/comments, then one token into the
-// window (tk/ts/tl/tline/tcol/ival). Ident slices stay as source offsets.
-fn sc_skip(m: P) -> P {
-    let skipping = true;
-    while skipping {
-        skipping = false;
-        if m.pos < m.n {
-            let c = at(m.src, m.pos, m.n);
-            if c == 32 || c == 9 || c == 13 {
-                m.pos = m.pos + 1;
-                m.col = m.col + 1;
-                skipping = true;
-            } else if c == 10 {
-                m.pos = m.pos + 1;
-                m.line = m.line + 1;
-                m.col = 1;
-                skipping = true;
-            } else if c == 47 && at(m.src, m.pos + 1, m.n) == 47 {
-                while m.pos < m.n && at(m.src, m.pos, m.n) != 10 {
-                    m.pos = m.pos + 1;
-                    m.col = m.col + 1;
-                }
-                skipping = true;
-            } else if c == 47 && at(m.src, m.pos + 1, m.n) == 42 {
-                // /* ... */ block comment; unterminated carries E0001
-                let oln = m.line;
-                let ocl = m.col;
-                m.pos = m.pos + 2;
-                m.col = m.col + 2;
-                let closed = false;
-                while !closed && m.pos < m.n {
-                    if at(m.src, m.pos, m.n) == 42 && at(m.src, m.pos + 1, m.n) == 47 {
-                        closed = true;
-                        m.pos = m.pos + 2;
-                        m.col = m.col + 2;
-                    } else {
-                        let bc = at(m.src, m.pos, m.n);
-                        if bc == 10 {
-                            m.line = m.line + 1;
-                            m.col = 1;
-                        } else {
-                            m.col = m.col + 1;
-                        }
-                        m.pos = m.pos + 1;
-                    }
-                }
-                if !closed {
-                    m.bn = 0;
-                    m = diagc(m, 1, 0, oln, ocl, 1, "close the */ or keep using // line comments");
-                }
-                skipping = true;
-            }
-        }
+// JSON string escape to pool (printer helper)
+fn appj(m: P, b: i32) -> P {
+    if b == 34 || b == 92 {
+        m = ppb(m, 92);
+        return ppb(m, b);
     }
-    return m;
+    if b == 10 { m = ppb(m, 92); return ppb(m, 110); }
+    if b == 9  { m = ppb(m, 92); return ppb(m, 116); }
+    if b < 32 {
+        m = ppb(m, 92);
+        m = ppb(m, 117);
+        m = ppb(m, 48);
+        m = ppb(m, 48);
+        let h = b / 16;
+        let l2 = b % 16;
+        if h < 10 { m = ppb(m, 48 + h); } else { m = ppb(m, 87 + h); }
+        if l2 < 10 { m = ppb(m, 48 + l2); } else { m = ppb(m, 87 + l2); }
+        return m;
+    }
+    return ppb(m, b);
 }
 
-// diag commit: caller composes the msg into m.b (length m.bn), then this
-// stores the row; mirrors diag(sp, code, sev, msg, hint)
+// diag commit: msg prebuilt in Scratch b; rows stored (diag.c order)
 fn diagc(m: P, code: i32, sev: i32, line: i32, col: i32, slen: i32, hint: str) -> P {
-    if m.nd >= 64 {
+    if m.nd >= 24 {
         return m;
     }
     m.dcode[m.nd] = code;
@@ -392,43 +326,6 @@ fn diagc(m: P, code: i32, sev: i32, line: i32, col: i32, slen: i32, hint: str) -
     m.NER = m.NER + 1;
     return m;
 }
-
-// freeze-pool RANGE-by-id helpers for the printer
-fn appj(m: P, b: i32) -> P {
-    if b == 34 || b == 92 {
-        m = ppb(m, 92);
-        return ppb(m, b);
-    }
-    if b == 10 {
-        m = ppb(m, 92);
-        return ppb(m, 110);
-    }
-    if b == 9 {
-        m = ppb(m, 92);
-        return ppb(m, 116);
-    }
-    if b < 32 {
-        m = ppb(m, 92);
-        m = ppb(m, 117);
-        m = ppb(m, 48);
-        m = ppb(m, 48);
-        let h = b / 16;
-        let l = b % 16;
-        if h < 10 {
-            m = ppb(m, 48 + h);
-        } else {
-            m = ppb(m, 87 + h);
-        }
-        if l < 10 {
-            m = ppb(m, 48 + l);
-        } else {
-            m = ppb(m, 87 + l);
-        }
-        return m;
-    }
-    return ppb(m, b);
-}
-
 
 // ---------------- keyword lookup (KEYWORDS order of lex.c) ----------------
 
@@ -561,6 +458,54 @@ fn lex_op(m: P) -> P {
 // ---------------- scanner (lex.c port) ----------------
 
 // advance one byte, tracking line/col
+// skip ws + comments (lex.c skip_ws_comments)
+fn sc_skip(m: P) -> P {
+    let skipping = true;
+    while skipping {
+        skipping = false;
+        if m.pos < m.n {
+            let c = at(m.src, m.pos, m.n);
+            let c1 = at(m.src, m.pos + 1, m.n);
+            if c == 32 || c == 9 || c == 13 || c == 10 {
+                m = advbyte(m);
+                skipping = true;
+            } else if c == 47 && c1 == 47 {
+                while m.pos < m.n && at(m.src, m.pos, m.n) != 10 {
+                    m = advbyte(m);
+                }
+                skipping = true;
+            } else if c == 47 && c1 == 42 {
+                let oln = m.line;
+                let ocl = m.col;
+                m = advbyte(m);
+                m = advbyte(m);
+                let closed = false;
+                let scanning2 = true;
+                while scanning2 {
+                    scanning2 = false;
+                    if m.pos < m.n {
+                        if at(m.src, m.pos, m.n) == 42 &&
+                           at(m.src, m.pos + 1, m.n) == 47 {
+                            closed = true;
+                            m = advbyte(m);
+                            m = advbyte(m);
+                        } else {
+                            m = advbyte(m);
+                            scanning2 = true;
+                        }
+                    }
+                }
+                if !closed {
+                    m = diagc(m, 1, 0, oln, ocl, 2,
+                              "close the */ or keep using // line comments");
+                }
+                skipping = true;
+            }
+        }
+    }
+    return m;
+}
+
 fn advbyte(m: P) -> P {
     if m.pos < m.n {
         let c = at(m.src, m.pos, m.n);
@@ -1124,3 +1069,1476 @@ fn put_i64(v: i64) -> () {
     return;
 }
 // --- parser phase WIP: parse_expr family (see lexer phase L above) ---
+
+// ---------------- parser phase P1: types ----------------
+// Results thread on P: TY/TNS/TNL after the call. ty ordinals mirror util.c:
+// 0 i8 1 i16 2 i32 3 i64 4 u8 5 u16 6 u32 7 u64 8 isize 9 usize 10 f32
+// 11 f64 12 bool 13 str 14 unit 15 nullptr 17 tname 19 opt 20 result
+// 21 array 22 ptr8
+
+fn ty_ww(m: P, st: i32, ln: i32, lit: str, ty: i32, acc: i32, atye: i32) -> i32 {
+    if acc != 0 {
+        return acc;
+    }
+    if kw_match(m, st, ln, lit) {
+        return ty;
+    }
+    return atye;
+}
+
+// TK==ident? then the name must be treated as a type keyword
+fn kw_at(m: P, st: i32, ln: i32, lit: str) -> bool {
+    return kw_match(m, st, ln, lit);
+}
+
+// parse a type; reads beyond the token; no diags of its own except nested.
+// mode unused at the checker since no text is printed (was: emit shape)
+fn parse_type(m: P) -> P {
+    m.tns = 0;
+    m.tnl = 0;
+    m.ty = 17;
+    if m.tk == 53 {
+        // *T pointer (extern islands only on the C side; same shape)
+        m = adv(m);
+        if m.tk == 1 {
+            m = adv(m);
+        }
+        m.ty = 22;
+        return m;
+    }
+    if m.tk == 25 {
+        // [ N ] T -> array; N needs a digit literal
+        m = adv(m);
+        let alen: i64 = cast<i64>(0);
+        if m.tk == 2 {
+            alen = m.ival;
+            m = adv(m);
+        }
+        if m.tk == 26 {
+            m = adv(m);
+        }
+        m = parse_type(m);
+        m.ty = 21;
+        m.tns = 0;
+        m.tnl = 0;
+        m.pln = 0;
+        m.ival = alen;
+        return m;
+    }
+    if m.tk == 23 {
+        // "()" = unit/void; a lone "(" falls through to the ident expect
+        m = adv(m);
+        if m.tk == 24 {
+            m = adv(m);
+            m.ty = 14;
+            return m;
+        }
+    }
+    if m.tk != 1 {
+        m.ty = 17;
+        m.tns = 0;
+        m.tnl = 0;
+        return m;
+    }
+    let st = m.ts;
+    let ln = m.tl;
+    m = adv(m);
+    let ty = 17;
+    if ln == 2 && kw_at(m, st, ln, "i8") { ty = 0; }
+    if ln == 2 && kw_at(m, st, ln, "u8") { ty = 4; }
+    if ln == 3 && kw_at(m, st, ln, "i16") { ty = 1; }
+    if ln == 3 && kw_at(m, st, ln, "u16") { ty = 5; }
+    if ln == 3 && kw_at(m, st, ln, "i32") { ty = 2; }
+    if ln == 3 && kw_at(m, st, ln, "i64") { ty = 3; }
+    if ln == 3 && kw_at(m, st, ln, "u32") { ty = 6; }
+    if ln == 3 && kw_at(m, st, ln, "u64") { ty = 7; }
+    if ln == 3 && kw_at(m, st, ln, "f32") { ty = 10; }
+    if ln == 3 && kw_at(m, st, ln, "f64") { ty = 11; }
+    if ln == 3 && kw_at(m, st, ln, "str") { ty = 13; }
+    if ln == 4 && kw_at(m, st, ln, "bool") { ty = 12; }
+    if ln == 5 && kw_at(m, st, ln, "isize") { ty = 8; }
+    if ln == 5 && kw_at(m, st, ln, "usize") { ty = 9; }
+    let isopt = kw_at(m, st, ln, "opt");
+    let isres = kw_at(m, st, ln, "result");
+    if (isopt || isres) && m.tk == 44 {
+        m = adv(m);
+        m = parse_type(m);
+        if isres {
+            if m.tk == 29 {
+                m = adv(m);
+            }
+            m = parse_type(m);
+        }
+        if m.tk == 45 {
+            m = adv(m);
+        }
+        if isres { m.ty = 20; } else { m.ty = 19; }
+        m.tns = 0;
+        m.tnl = 0;
+        return m;
+    }
+    // T69: alias types carry the name (tname = seg id)
+    m.ty = ty;
+    if ty == 17 {
+        m.tns = st;
+        m.tnl = ln;
+    } else {
+        m.tns = 0;
+        m.tnl = 0;
+    }
+    return m;
+}
+
+// ---------------- expressions: parse + typecheck fused ----------------
+// Threads: m.ty / m.tns(tname seg) = type of the just-checked expr.
+
+// find a local by name seg match; returns index or -1
+fn lo_find(m: P, ns: i32, nl: i32) -> i32 {
+    let i = m.NLO - 1;
+    while i >= 0 {
+        if seg_eq(m, m.LON[i], ns, nl) {
+            return i;
+        }
+        i = i - 1;
+    }
+    return 0 - 1;
+}
+
+fn seg_eq(m: P, a: i32, ns: i32, nl: i32) -> bool {
+    if a < 0 || ns < 0 {
+        return false;
+    }
+    if m.s1[a] - m.s0[a] != nl {
+        return false;
+    }
+    let i = 0;
+    while i < nl {
+        if at(m.src, m.s0[a] + i, m.n) != at(m.src, ns + i, m.n) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// ty_same? bool: exact ty + tname
+fn ty_same(m: P, a: i32, atn: i32, b: i32, btn: i32) -> bool {
+    if a != b {
+        return false;
+    }
+    if a == 17 || a == 19 || a == 20 || a == 21 {
+        if a == 21 {
+            return true; // arrays: element ty not checked here (C same)
+        }
+        if (atn < 0) != (btn < 0) {
+            return false;
+        }
+        if atn < 0 {
+            return true;
+        }
+        return seg_eq(m, atn, m.s0[btn], m.s1[btn] - m.s0[btn]);
+    }
+    return true;
+}
+
+// ---------------- join/compare slate (ty_name etc) ----------------
+
+// ty builtin display name (TY_NAMES)
+fn ty_name(t: i32) -> str {
+    if t == 0 { return "i8"; }
+    if t == 1 { return "i16"; }
+    if t == 2 { return "i32"; }
+    if t == 3 { return "i64"; }
+    if t == 4 { return "u8"; }
+    if t == 5 { return "u16"; }
+    if t == 6 { return "u32"; }
+    if t == 7 { return "u64"; }
+    if t == 8 { return "isize"; }
+    if t == 9 { return "usize"; }
+    if t == 10 { return "f32"; }
+    if t == 11 { return "f64"; }
+    if t == 12 { return "bool"; }
+    if t == 13 { return "str"; }
+    if t == 14 { return "()"; }
+    if t == 15 { return "struct"; }
+    if t == 16 { return "enum"; }
+    if t == 17 { return "typedef"; }
+    return "?";
+}
+
+// "no cascade" args: unset stops checking deeper
+fn ty_fence(m: P, a: i32, an: i32, b: i32, bn: i32) -> bool {
+    if (a == 22 && b == 13) || (a == 13 && b == 22) {
+        return true;
+    }
+    return false;
+}
+
+// compose ty name (with tname seg as composite/anon type) to scratch
+fn tyd(m: P, t: i32, tn: i32) -> P {
+    if t == 21 {
+        if tn < 0 {
+            return cpC(m, "[?]?");
+        }
+        // search arrays: [len]elem
+        let i = 0;
+        while i < m.NAR {
+            if m.ARN[i] == tn {
+                m = cpC(m, "[");
+                m = cpI64(m, m.ARLEN[i]);
+                m = cpC(m, "]");
+                return tyd(m, m.ARTY[i], m.ARTN[i]);
+            }
+            i = i + 1;
+        }
+        return cpC(m, "[?]?");
+    }
+    if t == 19 || t == 20 {
+        if tn < 0 {
+            return cpC(m, ty_name(t));
+        }
+        let k = anon_idx(m, tn);
+        if k < 0 {
+            return cpeq(m, tn);
+        }
+        if t == 20 {
+            m = cpC(m, "result<");
+        } else {
+            m = cpC(m, "opt<");
+        }
+        if m.A0Y[k] >= 0 {
+            m = tyd(m, m.A0Y[k], m.A0T[k]);
+        } else {
+            m = cpC(m, "?");
+        }
+        if t == 20 {
+            m = cpC(m, ", ");
+            if m.A1Y[k] >= 0 {
+                m = tyd(m, m.A1Y[k], m.A1T[k]);
+            } else {
+                m = cpC(m, "?");
+            }
+        }
+        m = cpC(m, ">");
+    }
+    if t == 15 || t == 16 || t == 17 {
+        if tn >= 0 {
+            return cpeq(m, tn);
+        }
+        return cpC(m, "composite");
+    }
+    return cpC(m, ty_name(t));
+}
+
+// u8 pool free helper for array len compose
+fn cpI64(m: P, v: i64) -> P {
+    let a: u64 = cast<u64>(v);
+    if v < 0 {
+        m = cpc(m, 45);
+        a = cast<u64>(0 - v);
+    }
+    let buf: [24]u8;
+    let n = 0;
+    if a == 0 { buf[0] = 48; n = 1; }
+    let running = true;
+    while running {
+        running = false;
+        if a > 0 {
+            buf[n] = cast<u8>(48 + cast<i32>(a) % 10);
+            n = n + 1;
+            a = a / 10;
+            running = true;
+        }
+    }
+    let i = 0;
+    while i < n {
+        m = cpc(m, cast<i32>(buf[n - 1 - i]));
+        i = i + 1;
+    }
+    return m;
+}
+
+fn anon_idx(m: P, tn: i32) -> i32 {
+    if tn < 0 {
+        return 0 - 1;
+    }
+    let i = 0;
+    while i < m.NNA {
+        if m.ANN[i] == tn {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// anon registry: find by name seg; declare by assignment
+fn anon_find(m: P, tn: i32) -> P {  // sets m.pln (hack: carrier)
+    m.pln = 0 - 1;
+    if tn < 0 {
+        return m;
+    }
+    let i = 0;
+    while i < m.NNA {
+        if m.ANN[i] == tn {
+            m.pln = i;
+            return m;
+        }
+        i = i + 1;
+    }
+    return m;
+}
+
+// segs compare: ANN name vs tname
+fn seg_eqm(m: P, a: i32, ns: i32, nl: i32) -> bool {
+    if a < 0 || ns < 0 {
+        return false;
+    }
+    return m.ANN[a] == ns;
+}
+
+// ---------------- parse+check expressions (tc_expr fused) ----------------
+// parse/typecheck one expression; on entry m.tk = first token. COLLAPSED:
+// expression tree is not built; scopes resolve from P. m.ty/tname = result.
+
+fn t_is_int(t: i32) -> bool {
+    return t >= 0 && t <= 9;
+}
+
+fn t_is_float(t: i32) -> bool {
+    return t == 10 || t == 11;
+}
+
+fn t_is_num(t: i32) -> bool {
+    return t_is_int(t) || t_is_float(t);
+}
+
+// adopt INT literal value to partner type when representable (typecheck.c)
+fn lit_adopt(m: P, t: i32, v: i64) -> P {
+    m.pln = -1;
+        let a0: i64 = cast<i64>(0-128);
+    let a1: i64 = cast<i64>(127);
+    if t == 0 && v >= a0 && v <= a1 { m.pln = t; return m; }
+    let b0: i64 = cast<i64>(0-32768);
+    let b1: i64 = cast<i64>(32767);
+    if t == 1 && v >= b0 && v <= b1 { m.pln = t; return m; }
+        let lo: i64 = cast<i64>(0 - 2147483647);
+    lo = lo - 1;
+    let hi: i64 = cast<i64>(2147483647);
+    if t == 2 && v >= lo && v <= hi { m.pln = t; return m; }
+    if t == 3 || t == 8 { m.pln = 3; return m; }
+        let c1: i64 = cast<i64>(255);
+    if t == 4 && v >= 0 && v <= c1 { m.pln = t; return m; }
+        let d1: i64 = cast<i64>(65535);
+    if t == 5 && v >= 0 && v <= d1 { m.pln = t; return m; }
+    if t == 6 && v >= 0 && v <= 4294967295 { m.pln = t; return m; }
+    if (t == 7 || t == 9) && v >= 0 { m.pln = 7; return m; }
+    if t == 10 || t == 11 { m.pln = t; return m; }
+    return m;
+}
+
+// ---------------- primary: literal / ident / call / cast ----------------
+// After a successful unit: m.ty / m.tn set (tn carries -1 unless named)
+
+fn set_ty(m: P, t: i32, tn: i32) -> P {
+    m.ty = t;
+    m.tn = tn;
+    return m;
+}
+
+fn expect_rparen(m: P, why: str) -> P {
+    if m.tk == 24 {
+        return adv(m);
+    }
+    return m;
+}
+
+// --- constructors (tc_ctor port) ---
+
+// the ctor name: none/some/ok/err by first letter: n/s/k/e
+fn ctor_pick(m: P, from: i32, ln: i32) -> i32 {
+    if ln >= 1 {
+        let c = at(m.src, from, m.n);
+        if ln == 4 && kw_match(m, from, ln, "none") { return 110; }
+        if ln == 4 && kw_match(m, from, ln, "some") { return 115; }
+        if ln == 2 && kw_match(m, from, ln, "ok") { return 107; }
+        if ln == 3 && kw_match(m, from, ln, "err") { return 101; }
+    }
+    return 0;
+}
+
+// find fn by name seg; m.pln = idx-or-minus
+fn fn_find(m: P, ns: i32, nl: i32) -> P {
+    m.pln = 0 - 1;
+    let i = 0;
+    while i < m.NF {
+        if seg_eq(m, m.FN[i], ns, nl) {
+            m.pln = i;
+            return m;
+        }
+        i = i + 1;
+    }
+    return m;
+}
+
+// ---------------- EXPRESSION checker unwoven ----------------
+// same shape as the C: EXPR -> UNARY -> POSTFIX (dot/index/?spread) ->
+// BINARY chain, with typecheck woven inline at each join.
+// Result: m.ty / m.tn.
+
+// lookup the field list of a struct by its name seg; m.pln = idx or -1
+fn st_find(m: P, tn: i32) -> P {
+    m.pln = 0 - 1;
+    let i = 0;
+    while i < m.NSD {
+        if m.SDN[i] == tn {
+            m.pln = i;
+            return m;
+        }
+        i = i + 1;
+    }
+    return m;
+}
+
+// enumeration registry lookup
+fn en_find(m: P, tn: i32) -> P {
+    m.pln = 0 - 1;
+    let i = 0;
+    while i < m.NEN {
+        if m.EMN[i] == tn {
+            m.pln = i;
+            return m;
+        }
+        i = i + 1;
+    }
+    return m;
+}
+
+// E0201 "unknown identifier '<name>' in this scope"
+fn err_unknown(m: P, sl: i32, sc: i32, ns: i32, nl: i32) -> P {
+    m = mbeg(m);
+    m = cpC(m, "unknown identifier '");
+    m = seg_new(m, ns, ns + nl);
+    m = cpe(m, m.pln);
+    m = cpC(m, "' in this scope");
+    return diagc(m, 201, 0, sl, sc, 1, "define it, use the right module, or fix spelling");
+}
+
+
+// ---------------- postfix: FIELD / INDEX / SPREAD ----------------
+
+// find field row of struct si by name seg; m.pln = row or -1
+fn st_field(m: P, si: i32, ns: i32, nl: i32) -> P {
+    m.pln = 0 - 1;
+    let i = m.nBF - 1;
+    while i >= 0 {
+        if m.BF[i] == si && seg_eq(m, m.BFN[i], ns, nl) {
+            m.pln = i;
+            return m;
+        }
+        i = i - 1;
+    }
+    return m;
+}
+
+// one postfix step: '.' field / '[' index / '?' spread; loops INSIDE via the
+// caller (return m with tk = the next token)
+fn pst_field(m: P, bty: i32, btn: i32, stl: i32, stc: i32) -> P {
+    let sl = m.tline;
+    let sc = m.tcol;
+    m = adv(m); // the .name
+    if bty == -1 {
+        return set_ty(m, -1, -1);
+    }
+    if bty != 15 {
+        m = mbeg(m);
+        m = cpC(m, "field access needs a struct value, not ");
+        m = tyd(m, bty, btn);
+        return diagc(m, 202, 0, stl, stc, 1,
+                     "structs carry named fields; enums are matched, not read field-wise");
+    }
+    if m.tk != 1 {
+        m = adv(m);
+        return set_ty(m, -1, -1);
+    }
+    let ns = m.ts;
+    let nl = m.tl;
+    let sl2 = m.tline;
+    let sc2 = m.tcol;
+    m = adv(m);
+    if m.tk == 23 {
+        // E0101: methods are not a thing in v0
+        return diagc(m, 101, 0, sl, sc2, 1, "structs are data, not objects; use free fns");
+    }
+    m = st_find(m, btn);
+    if m.pln < 0 {
+        return set_ty(m, -1, -1);
+    }
+    m = st_field(m, m.pln, ns, nl);
+    if m.pln < 0 {
+        m = mbeg(m);
+        m = cpC(m, "struct '");
+        m = cpeq(m, btn);
+        m = cpC(m, "' has no field '");
+        m = seg_new(m, ns, ns + nl);
+        m = cpe(m, m.pln);
+        m = cpC(m, "'");
+        return diagc(m, 202, 0, sl, sc2, 1, "check the field list in the struct decl");
+    }
+    let bLI = m.LI;
+    return set_ty(m, m.BFT[m.pln], m.BFTN[m.pln]);
+}
+
+// '[' postfix step: arrays OOB check on a literal index + str u8 result
+fn pst_index(m: P, bty: i32, btn: i32, stl: i32, stc: i32) -> P {
+    let b0 = m.ts;
+    m = adv(m); // the '['
+    if bty == -1 {
+        m = parse_expr(m);
+        if m.tk == 26 {
+            m = adv(m);
+        }
+        return set_ty(m, -1, -1);
+    }
+    if bty == 21 {
+        // array
+        m = rt_arr(m, btn);
+        let arow = m.pln;
+        if arow < 0 {
+            m = diagc(m, 202, 0, stl, stc, 1, "the array type was not registered by the parser");
+            m = parse_expr(m);
+            if m.tk == 26 {
+                m = adv(m);
+            }
+            return set_ty(m, -1, -1);
+        }
+        let il0 = m.tline;
+        let ic0 = m.tcol;
+        m = parse_expr(m);
+        if m.tk == 26 {
+            m = adv(m);
+        }
+        let ity = m.ty;
+        if ity != -1 && !t_is_int(ity) {
+            m = mbeg(m);
+            m = cpC(m, "array index must be an integer, got ");
+            m = tyd(m, ity, m.tn);
+            return diagc(m, 202, 0, il0, ic0, 1, "indexes are i8..u64; cast the value explicitly if needed");
+        }
+        if ity != -1 && m.LI != 0 {
+            let k = m.ival;
+            if m.LI == 2 {
+                k = 0 - k;
+            }
+            if k < 0 || k >= m.ARLEN[arow] {
+                m = mbeg(m);
+                m = cpC(m, "index ");
+                m = cpI64(m, k);
+                m = cpC(m, " is out of bounds for [");
+                m = cpI64(m, m.ARLEN[arow]);
+                m = cpC(m, "]");
+                return diagc(m, 202, 0, il0, ic0, 1, "valid indexes are 0 through the last legal row");
+            }
+        }
+        m.LI = 0;
+        let base = m;
+        let it2 = base.ival;
+        return set_ty(m, m.ARTY[arow], m.ARTN[arow]);
+    }
+    if bty == 13 || bty == 22 {
+        // str or ptr8 char index
+        let il2 = m.tline;
+        let ic2 = m.tcol;
+        m = parse_expr(m);
+        if m.tk == 26 {
+            m = adv(m);
+        }
+        if m.ty != -1 && !t_is_int(m.ty) {
+            m = mbeg(m);
+            m = cpC(m, "str index must be an integer, got ");
+            m = tyd(m, m.ty, m.tn);
+            return diagc(m, 202, 0, il2, ic2, 1, "indexes are i8..u64; cast the value explicitly if needed");
+        }
+        m.LI = 0;
+        return set_ty(m, 4, -1);
+    }
+    // unsupported index
+    m = mbeg(m);
+    m = cpC(m, "indexing needs an array or str, got ");
+    m = tyd(m, bty, btn);
+    m = mtail(m);
+    m = adv(m); // the ']'
+    return diagc(m, 202, 0, stl, stc, 1, "only fixed arrays and str support [i] in v0");
+}
+
+// array find by tname seg; m.pln = row or -1
+fn rt_arr(m: P, tn: i32) -> P {
+    m.pln = 0 - 1;
+    let i = 0;
+    while i < m.NAR {
+        if m.ARN[i] == tn {
+            m.pln = i;
+            return m;
+        }
+        i = i + 1;
+    }
+    return m;
+}
+
+// garbage tail on the unsupported index message (the "got %s" tail)
+fn mtail(m: P) -> P {
+    return cpC(m, "'");
+}
+
+// tok_kind_word words (lex.c WORDS, ordinal order)
+fn tok_word(k: i32) -> str {
+    if k == 0 { return "end of input"; }
+    if k == 1 { return "identifier"; }
+    if k == 2 { return "number"; }
+    if k == 3 { return "float"; }
+    if k == 4 { return "string"; }
+    if k == 5 { return "'fn'"; }
+    if k == 6 { return "'let'"; }
+    if k == 7 { return "'const'"; }
+    if k == 8 { return "'return'"; }
+    if k == 9 { return "'if'"; }
+    if k == 10 { return "'else'"; }
+    if k == 11 { return "'while'"; }
+    if k == 12 { return "'match'"; }
+    if k == 13 { return "'struct'"; }
+    if k == 14 { return "'enum'"; }
+    if k == 15 { return "'use'"; }
+    if k == 16 { return "'tier'"; }
+    if k == 17 { return "'extern'"; }
+    if k == 18 { return "'cast'"; }
+    if k == 19 { return "'true'"; }
+    if k == 20 { return "'false'"; }
+    if k == 21 { return "'mut'"; }
+    if k == 22 { return "'pub'"; }
+    if k == 23 { return "'('"; }
+    if k == 24 { return "')'"; }
+    if k == 25 { return "'['"; }
+    if k == 26 { return "']'"; }
+    if k == 27 { return "'{'"; }
+    if k == 28 { return "'}'"; }
+    if k == 29 { return "','"; }
+    if k == 30 { return "';'"; }
+    if k == 31 { return "':'"; }
+    if k == 32 { return "'::'"; }
+    if k == 33 { return "'.'"; }
+    if k == 34 { return "'->'"; }
+    if k == 35 { return "'=>'"; }
+    if k == 36 { return "'='"; }
+    if k == 37 { return "'+='"; }
+    if k == 38 { return "'-='"; }
+    if k == 39 { return "'*='"; }
+    if k == 40 { return "'/='"; }
+    if k == 41 { return "'%='"; }
+    if k == 42 { return "'=='"; }
+    if k == 43 { return "'!='"; }
+    if k == 44 { return "'<'"; }
+    if k == 45 { return "'>'"; }
+    if k == 46 { return "'<='"; }
+    if k == 47 { return "'>='"; }
+    if k == 48 { return "'&&'"; }
+    if k == 49 { return "'||'"; }
+    if k == 50 { return "'!'"; }
+    if k == 51 { return "'+'"; }
+    if k == 52 { return "'-'"; }
+    if k == 53 { return "'*'"; }
+    if k == 54 { return "'/'"; }
+    if k == 55 { return "'%'"; }
+    if k == 56 { return "'&'"; }
+    if k == 57 { return "'?'"; }
+    return "'**'";
+}
+
+// ---------------- primary (parse+check) ----------------
+
+// INT: fits i32 -> i32 else i64; LI = 1 marks a fresh positive literal
+fn pr_int(m: P) -> P {
+    let v = m.ival;
+    m = adv(m);
+    let t = 3;
+    let lo: i64 = cast<i64>(0 - 2147483647);
+    lo = lo - 1;
+    let hi: i64 = cast<i64>(2147483647);
+    if v >= lo && v <= hi {
+        t = 2;
+    }
+    m.LI = 1;
+    m.LLI = 1;
+    m.LIV = v;
+    m.X0L = m.pln;
+    m.X0C = m.pcl;
+    return set_ty(m, t, -1);
+}
+
+// found struct local: type check write to m
+fn pr_local(m: P, row: i32, sl: i32, sc: i32) -> P {
+    m = adv(m);
+    m.LI = 0;
+    return set_ty(m, m.LOT[row], m.LTN[row]);
+}
+
+// ---------------- the big primary: ident / call / cast / init ----------------
+
+fn pr_ident(m: P) -> P {
+    let ns = m.ts;
+    let nl = m.tl;
+    let sl = m.tline;
+    let sc = m.tcol;
+    let sig = 0;
+    let li = lo_find(m, ns, nl);
+    if li >= 0 {
+        return pr_local(m, li, sl, sc);
+    }
+    // bare `none` opt ctor
+    if kw_match(m, ns, nl, "none") {
+        if find_nothn_fn(m, ns, nl) != 1 {
+            return tc_ctor_none(m, sl, sc);
+        }
+    }
+    if kw_match(m, ns, nl, "null") {
+        // reported once at parse; no value, no cascade
+        m = adv(m);
+        return set_ty(m, -1, -1);
+    }
+    m = adv(m);
+    // variant / init-si / call / var
+    if m.tk == 32 {
+        return p_inst(m, ns, nl, sl, sc);
+    }
+    if m.tk == 27 && m.si == 1 {
+        return p_init(m, ns, nl, sl, sc);
+    }
+    if m.tk == 23 {
+        return p_call(m, ns, nl, sl, sc);
+    }
+    m.LI = 0;
+    return set_ty(m, -1, -1);   // ident used as a value only in expr ctx
+}
+
+// ---------------- expr / unary / bin (the real thing) ----------------
+
+// postfix loop: consumes dot / index / spread repeatedly
+fn parse_postfix(m: P) -> P {
+    let going = true;
+    while going {
+        going = false;
+        if m.tk == 33 {
+            m = pst_field(m, m.ty, m.tn, m.X0L, m.X0C);
+            going = true;
+        } else if m.tk == 25 {
+            m = pst_index(m, m.ty, m.tn, m.X0L, m.X0C);
+            going = true;
+        } else if m.tk == 57 {
+            m = pst_spread(m);
+            going = true;
+        }
+    }
+    return m;
+}
+
+// '?' statement-level spread
+fn pst_spread(m: P) -> P {
+    let stl = m.X0L;
+    let stc = m.X0C;
+    let bty = m.ty;
+    let btn = m.tn;
+    m = adv(m);
+    if bty != 19 && bty != 20 {
+        if bty != -1 {
+            m = mbeg(m);
+            m = cpC(m, "'?' spreads opt/result values, got ");
+            m = tyd(m, bty, btn);
+            m = diagc(m, 202, 0, stl, stc, 1, "unwrap with match or make the source opt/result");
+        }
+        return set_ty(m, -1, -1);
+    }
+    // the fn must return the same shape to spread out
+    m = fn_cols(m, m.CFN);
+    let rty = m.FRT[m.CFN];
+    let rtyname = m.FRTN[m.CFN];
+    if rty != bty {
+        // keep the payload flowing to kill cascades
+        let k = anon_idx(m, btn);
+        if k >= 0 && m.A0Y[k] >= 0 {
+            m = set_ty(m, m.A0Y[k], m.A0T[k]);
+        }
+        if rty == 19 || rty == 20 {
+            m = mbeg(m);
+            m = cpC(m, "cannot spread ");
+            m = tyd(m, bty, btn);
+            m = cpC(m, " out of a fn returning ");
+            m = tyd(m, rty, rtyname);
+            return diagc(m, 202, 0, stl, stc, 1, "the failure payload must be the caller's own E/none");
+        }
+        m = mbeg(m);
+        m = cpC(m, "'?' inside a fn returning ");
+        m = tyd(m, rty, rtyname);
+        m = cpC(m, " cannot propagate; match it or return ");
+        m = tyd(m, bty, btn);
+        return diagc(m, 205, 0, stl, stc, 1, "make this fn return the same opt/result shape to use ? here");
+    }
+    let k = anon_idx(m, btn);
+    if k >= 0 && m.A0Y[k] >= 0 {
+        return set_ty(m, m.A0Y[k], m.A0T[k]);
+    }
+    return set_ty(m, -1, -1);
+}
+
+// fn-sig cols fetch (used by spread / call); reads m.FRT[m.CFN] as ret
+fn fn_cols(m: P, f: i32) -> P {
+    m.pln = f;
+    return m;
+}
+
+fn find_nothn_fn(m: P, ns: i32, nl: i32) -> i32 {
+    m = fn_find(m, ns, nl);
+    if m.pln >= 0 {
+        return 1;
+    }
+    return 0;
+}
+
+// '?' inside a non-spreading expression position: E0101 + unset
+fn spr_fail(m: P, stl: i32, stc: i32) -> P {
+    return diagc(m, 101, 0, stl, stc, 1,
+                 "hoist the wrapped expr into a let, then spread it");
+}
+
+// the unary layer: ! - & then postfix
+fn parse_unary(m: P) -> P {
+    let ul = m.tline;
+    let uc = m.tcol;
+    if m.tk == 50 {
+        // '!': operand must be bool; result bool
+        m = adv(m);
+        m = parse_unary(m);
+        if m.ty != -1 && m.ty != 12 {
+            m = diagc(m, 202, 0, m.X0L, m.X0C, 1, "comparisons produce bool; there is no truthiness in Tripon");
+        }
+        m.LI = 0;
+        return set_ty(m, 12, -1);
+    }
+    if m.tk == 56 {
+        // '&': E0101 borrows arrive with P1.1+; unwrap value is dead
+        m = diagc(m, 101, 0, ul, uc, 1, "pointer-free core until borrow rules land");
+        m = adv(m);
+        m = parse_unary(m);
+        return set_ty(m, -1, -1);
+    }
+    if m.tk == 52 {
+        // unary '-'
+        m = adv(m);
+        m = parse_unary(m);
+        let oty = m.ty;
+        let otn = m.tn;
+        if oty != -1 && !t_is_num(oty) {
+            m = diagc(m, 202, 0, m.X0L, m.X0C, 1, "arith ops exist only on numeric types");
+            return set_ty(m, -1, -1);
+        }
+        if oty != -1 && oty >= 4 && oty <= 9 {
+            m = diagc(m, 202, 0, m.X0L, m.X0C, 1, "wrapping-neg of unsigned is not a thing; use a signed type");
+            return set_ty(m, -1, -1);
+        }
+        if m.LI == 1 {
+            m.LI = 2;
+        }
+        return m;
+    }
+    // primary + postfix chain; '?' spread handling in C spread_pos
+    m = parse_primary(m);
+    return parse_postfix(m);
+}
+
+// ---------------- binary chain + JOIN ----------------
+
+// join two operand types by op kind; the op token's own span (ol/oc) feeds
+// error rows; C's EX_BIN sems: adopt, same-or-fence, per-op gates
+fn join_bin(m: P, op: i32, precl: i32, ol: i32, oc: i32) -> P {
+    let lty = m.LTY;
+    let ltn = m.LTX;
+    let rty = m.ty;
+    let rtn = m.tn;
+    let is_log = op == 48 || op == 49;
+    let is_cmp = op == 44 || op == 45 || op == 46 || op == 47;
+    let is_eq = op == 42 || op == 43;
+    let is_arith = op == 51 || op == 52 || op == 53 || op == 54 ||
+                   op == 55 || op == 58;
+    let cross = false;
+    // literal adoption (both sides INT literal, partner num)
+    if !is_log {
+        if m.LLI == 1 && t_is_num(rty) && rty != 12 {
+            m = lit_adopt(m, rty, m.LIV);
+            if m.pln >= 0 {
+                lty = m.pln;
+                ltn = -1;
+            }
+        }
+        if m.LI == 1 && t_is_num(lty) && lty != 12 {
+            m = lit_adopt(m, lty, m.ival);
+            if m.pln >= 0 {
+                rty = m.pln;
+                rtn = -1;
+            }
+        }
+    }
+    // cascade gate
+    if (lty == -1 || rty == -1) && !is_log {
+        return set_ty(m, -1, -1);
+    }
+    if is_log {
+        if lty != 12 || rty != 12 {
+            return diagc(m, 202, 0, ol, oc, 1, "there is no truthiness in Tripon; compare explicitly");
+        }
+        m.LI = 0;
+        return set_ty(m, 12, -1);
+    }
+    if is_cmp || is_eq {
+        if !ty_same(m, lty, ltn, rty, rtn) && !ty_fence(m, lty, ltn, rty, rtn) {
+            m = mbeg(m);
+            m = cpC(m, "cannot compare ");
+            m = tyd(m, lty, ltn);
+            m = cpC(m, " with ");
+            m = tyd(m, rty, rtn);
+            m = cpC(m, "; no implicit conversion exists");
+            m = diagc(m, 202, 0, ol, oc, 1, "same-type comparisons only; cast one side explicitly if that is the intent");
+            return set_ty(m, -1, -1);
+        }
+        if is_eq && !t_is_num(lty) && lty != 12 {
+            if lty == 13 || lty == 22 {
+                m.LI = 0;
+                return set_ty(m, 12, -1);
+            }
+            if lty == 21 {
+                return diagc(m, 207, 0, ol, oc, 1, "write a loop and compare each index, or compare a hash");
+            }
+            m = mbeg(m);
+            m = cpC(m, "composite equality on ");
+            m = tyd(m, lty, ltn);
+            m = cpC(m, " is not defined; no cast exists for it");
+            return diagc(m, 207, 0, ol, oc, 1, "compare field by field, or match on an enum tag instead");
+        }
+        if is_cmp && !t_is_num(lty) {
+            return diagc(m, 202, 0, ol, oc, 1, "no cross-type comparisons exist in Tripon");
+        }
+        m.LI = 0;
+        return set_ty(m, 12, -1);
+    }
+    if is_arith {
+        if !t_is_num(lty) || !t_is_num(rty) || !ty_same(m, lty, ltn, rty, rtn) {
+            m = mbeg(m);
+            m = cpC(m, "");
+            m = tyd(m, lty, ltn);
+            m = cpC(m, " and ");
+            m = tyd(m, rty, rtn);
+            m = cpC(m, " do not share an operator; no implicit conversion exists");
+            return diagc(m, 202, 0, ol, oc, 1, "types must match exactly; no implicit conversion exists; use cast<T>(x)");
+        }
+        m = mbeg(m);
+        if op == 55 && !t_is_int(lty) {
+            return diagc(m, 202, 0, ol, oc, 1, "float remainder is not a thing here; use fmod via extern if needed");
+        }
+        if op == 58 && !t_is_float(lty) {
+            return diagc(m, 202, 0, ol, oc, 1, "integer pow lands with the stdlib math module");
+        }
+        m.LI = 0;
+        return set_ty(m, lty, ltn);
+    }
+    return set_ty(m, -1, -1);
+}
+
+// ---------------- primary: literals / idents / struct / variant / cast ----
+
+fn parse_primary(m: P) -> P {
+    let stl = m.tline;
+    let stc = m.tcol;
+    m.X0L = stl;
+    m.X0C = stc;
+    if m.tk == 2 {
+        return pr_int(m);
+    }
+    if m.tk == 3 {
+        m = adv(m);
+        m.LI = 0;
+        return set_ty(m, 11, -1);
+    }
+    if m.tk == 4 {
+        m = adv(m);
+        m.LI = 0;
+        return set_ty(m, 13, -1);
+    }
+    if m.tk == 19 {
+        m = adv(m);
+        m.LI = 0;
+        return set_ty(m, 12, -1);
+    }
+    if m.tk == 20 {
+        m = adv(m);
+        m.LI = 0;
+        return set_ty(m, 12, -1);
+    }
+    if m.tk == 1 {
+        return pr_ident(m);
+    }
+    if m.tk == 22 {
+        // cast<T>(expr)
+        m = adv(m);
+        if m.tk == 44 {
+            m = adv(m);
+        }
+        m = parse_type(m);
+        let tty = m.ty;
+        let ttn = m.tn;
+        if m.tk == 45 {
+            m = adv(m);
+        }
+        if m.tk == 23 {
+            m = adv(m);
+        }
+        m = parse_expr(m);
+        if m.tk == 24 {
+            m = adv(m);
+        }
+        m.LI = 0;
+        // cast conversion-table gate (int<->int, int<->float, float<->float)
+        let st2 = m.ty;
+        let stn2 = m.tn;
+        if st2 == -1 {
+            return set_ty(m, tty, ttn);
+        }
+        let ok = (t_is_int(tty) && t_is_int(st2)) ||
+                 (t_is_float(tty) && t_is_float(st2)) ||
+                 (t_is_int(tty) && t_is_float(st2)) ||
+                 (t_is_float(tty) && t_is_int(st2));
+        if !ok {
+            m = mbeg(m);
+            m = cpC(m, "cast<");
+            m = tyd(m, tty, ttn);
+            m = cpC(m, "> from ");
+            m = tyd(m, st2, stn2);
+            m = cpC(m, " is not a defined conversion");
+            m = diagc(m, 207, 0, stl, stc, 1, "no implicit conversions exist; use cast<T>(x) for exact or explicit lossy casts");
+        }
+        return set_ty(m, tty, ttn);
+    }
+    if m.tk == 23 {
+        // paren group: transparent
+        m = adv(m);
+        m = parse_expr(m);
+        if m.tk == 24 {
+            m = adv(m);
+        }
+        return m;
+    }
+    if m.tk == 12 {
+        // match as an expression lands in a later slice
+        m = diagc(m, 101, 0, stl, stc, 1, "bind results to a let inside the arms");
+        m = adv(m);
+        return set_ty(m, 2, -1);
+    }
+    // expected an expression: C diags, advances, yields INT 0
+    m = mbeg(m);
+    m = cpC(m, "expected an expression, got ");
+    m = cpC(m, tok_word(m.tk));
+    return diagc(m, 101, 0, stl, stc, 1, "primary forms: literal, ident, call, (expr)");
+}
+
+// ---------------- binary driver ----------------
+
+fn parse_expr(m: P) -> P {
+    return parse_bin(m, 1);
+}
+
+// conditions and match scrutinees: si_ok suppressed there
+fn parse_cond(m: P) -> P {
+    let save = m.si;
+    m.si = 0;
+    m = parse_expr(m);
+    m.si = save;
+    return m;
+}
+
+// prec of a binary token; -1 not a binop
+fn bin_prec(k: i32) -> i32 {
+    if k == 49 { return 1; }
+    if k == 48 { return 2; }
+    if k == 42 || k == 43 { return 3; }
+    if k == 44 || k == 45 || k == 46 || k == 47 { return 4; }
+    if k == 51 || k == 52 { return 5; }
+    if k == 53 || k == 54 || k == 55 { return 6; }
+    return 0 - 1;
+}
+
+fn parse_bin(m: P, min: i32) -> P {
+    m = parse_unary(m);
+    let going = true;
+    while going {
+        going = false;
+        let k = m.tk;
+        let pr = bin_prec(k);
+        if pr >= min {
+            // preserve lhs on m.LTY/LTN; rhs on m.ty/m.tn; join after
+            m.LTY = m.ty;
+            m.LTX = m.tn;
+            let ol = m.tline;
+            let oc = m.tcol;
+            m = adv(m);
+            m = parse_bin(m, pr + 1);
+            m = join_bin(m, k, pr, ol, oc);
+            going = true;
+        }
+    }
+    return m;
+}
+
+// ---------------- ident tails: variant / struct-init / call / ctor ----------
+
+
+// bare `none` in expr position: needs the any want ctx via m.expY/expN
+fn tc_ctor_none(m: P, sl: i32, sc: i32) -> P {
+    m = adv(m);
+    m.LI = 0;
+    if m.expY >= 0 {
+        // opt<want> with tagged none
+        let k = anon_idx(m, m.expY);
+        if k < 0 {
+            k = anon_new(m, m.expY, m.expN);
+        }
+        m.A1Y[k] = -1;
+        return set_ty(m, 19, m.A0T[k]);
+    }
+    return diagc(m, 202, 0, sl, sc, 1, "bind 'none' to a variable of type opt<T> first");
+}
+
+
+// Name::Variant — enum instantiation
+fn p_inst(m: P, ns: i32, nl: i32, sl: i32, sc: i32) -> P {
+    m = adv(m); // ::
+    let vns = m.ts;
+    let vnl = m.tl;
+    m = adv(m); // Variant
+    m = seg_new(m, ns, ns + nl);
+    let tn = m.pln;
+    m = en_find(m, tn);
+    let er = m.pln;
+    if er < 0 {
+        m = err_unknown(m, sl, sc, ns, nl);
+        return set_ty(m, -1, -1);
+    }
+    let i = m.EVSEG[er];
+    let stop = i + m.EVNN[er];
+    let has = 0;
+    while i < stop {
+        if seg_eq(m, m.VNN[i], vns, vns + vnl) {
+            has = 1;
+        }
+        i = i + 1;
+    }
+    if has == 0 {
+        m = mbeg(m);
+        m = cpC(m, "enum ");
+        m = cpb(m, ns, ns + nl);
+        m = cpC(m, " has no variant named '");
+        m = cpb(m, vns, vns + vnl);
+        m = cpC(m, "'");
+        m = diagc(m, 202, 0, sl, sc, 1, "check the enum declaration for the variant list");
+        return set_ty(m, -1, -1);
+    }
+    if m.tk == 23 {
+        m = adv(m);
+        m = parse_expr(m);
+        if m.tk == 24 {
+            m = adv(m);
+        }
+    }
+    m.LI = 0;
+    return set_ty(m, 16, tn);
+}
+
+
+// struct literal Name { f: e, ... } — field-for-field, count + order check
+fn p_init(m: P, ns: i32, nl: i32, sl: i32, sc: i32) -> P {
+    m = seg_new(m, ns, ns + nl);
+    m = st_find(m, m.pln);
+    let srow = m.pln;
+    let sname = 0 - 1;
+    if srow >= 0 {
+        sname = m.SDN[srow];
+    }
+    m = adv(m); // {
+    let gotn = 0;
+    let wantn = 0;
+    if srow >= 0 {
+        let i = 0;
+        while i < m.nBF {
+            if m.BF[i] == srow {
+                wantn = wantn + 1;
+            }
+            i = i + 1;
+        }
+    }
+    let go = true;
+    while go {
+        go = false;
+        if m.tk != 28 && m.tk != 0 {
+            let fns = m.ts;
+            let fnl = m.tl;
+            let fl = m.tline;
+            let fc = m.tcol;
+            m = adv(m); // field name
+            if srow >= 0 {
+                m = st_field(m, srow, fns, fnl);
+            }
+            if m.tk == 31 {
+                m = adv(m);
+            } else {
+                m = diagc(m, 101, 0, fl, fc, 1, "struct literals are name: value, comma separated");
+            }
+            m = parse_expr(m);
+            m = adv(m); // ',' or '}'
+            if m.tk == 29 {
+                m = adv(m);
+                go = true;
+            }
+            gotn = gotn + 1;
+        }
+    }
+    m = adv(m); // }
+    m.LI = 0;
+    if srow < 0 {
+        return set_ty(m, -1, -1);
+    }
+    if gotn != wantn {
+        m = mbeg(m);
+        m = cpI32(m, wantn);
+        m = cpC(m, " fields declared; ");
+        m = cpI32(m, gotn);
+        m = cpC(m, " given");
+        m = diagc(m, 202, 0, sl, sc, 1, "struct literals set every field exactly once in source order");
+    }
+    return set_ty(m, 15, sname);
+}
+
+// ---- call machinery: sig known before args; want threads per arg ----------
+
+fn p_call(m: P, ns: i32, nl: i32, sl: i32, sc: i32) -> P {
+    m = adv(m); // (
+    m.LI = 0;
+    m.X0L = sl;
+    m.X0C = sc;
+    // resolve the callee shape first
+    m = fn_find(m, ns, nl);
+    let frow = m.pln;
+    let cpk = ctor_pick(m, ns, nl);
+    let brow = 0 - 1;
+    m = seg_new(m, ns, ns + nl);
+    let name = m.pln;
+    // builtin resolve
+    m = mbi_find(m, name);
+    brow = m.pln;
+    if frow >= 0 && brow >= 0 {
+        // local wins over builtin
+        brow = 0 - 1;
+    }
+    if frow < 0 && brow < 0 && cpk == 0 {
+        // unknown fn: parse the arg list for syntax only (no sig checks)
+        m = parse_args(m, 0 - 1, name, sl, sc);
+        m = adv(m);
+        m = mbeg(m);
+        m = cpC(m, "call to unknown function '");
+        m = cpb(m, ns, ns + nl);
+        m = cpC(m, "'");
+        m = diagc(m, 201, 0, sl, sc, 1, "define it, import the module, or fix spelling");
+        return set_ty(m, 0 - 1, 0 - 1);
+    }
+    if cpk != 0 && frow < 0 && brow < 0 {
+        // opt/result ctor: one arg, ty checks by kind
+        if m.tk != 24 {
+            m = parse_expr_nn(m);
+        }
+        if m.tk == 24 {
+            m = adv(m);
+        }
+        return tc_ctor(m, ns, nl, cpk, sl, sc);
+    }
+    // fn: per-arg thread param want; count + types checked in parse_args_f
+    let np = m.FPPn[frow];
+    return parse_args_f(m, frow, np, name, sl, sc);
+}
+
+fn parse_args(m: P, np: i32, name: i32, sl: i32, sc: i32) -> P {
+    let saveY = m.expY;
+    m.expY = 0 - 1;
+    let n = 0;
+    let go = true;
+    while go {
+        go = false;
+        if m.tk != 24 && m.tk != 0 {
+            m = parse_expr(m);
+            n = n + 1;
+            if m.tk == 29 {
+                m = adv(m);
+                go = true;
+            }
+        }
+    }
+    m = adv(m); // )
+    m.expY = saveY;
+    if np >= 0 && n != np {
+        m = mbeg(m);
+        m = cpI32(m, np);
+        m = cpC(m, " arg(s) required");
+        m = diagc(m, 202, 0, m.X0L, m.X0C, 1, "match the declared parameter list exactly");
+    }
+    m.na = n;
+    return m;
+}
+
+// appends source bytes [from, to) into the message buffer
+fn cpb(m: P, from: i32, to: i32) -> P {
+    let i = from;
+    while i < to {
+        m = cpc(m, at(m.src, i, m.n));
+        i = i + 1;
+    }
+    return m;
+}
+
+// appends decimal i32
+fn cpI32(m: P, v: i32) -> P {
+    if v < 0 {
+        m = cpc(m, 45);
+        return cpI32(m, (0 - 1) * v);
+    }
+    if v >= 10 {
+        m = cpI32(m, v / 10);
+    }
+    return cpc(m, 48 + v % 10);
+}
+
+// anon registry insert (helper used by the ctor paths); returns row k
+fn anon_new(m: P, a0: i32, a1: i32) -> i32 {
+    let k = m.NNA;
+    m.A0Y[k] = a0;
+    m.A0T[k] = a1;
+    m.NNA = k + 1;
+    return k;
+}
+
+// ctor dispatch (kind from ctor_pick): 110 none, 115 some, 107 ok, 101 err
+fn tc_ctor(m: P, ns: i32, nl: i32, kind: i32, sl: i32, sc: i32) -> P {
+    m.LI = 0;
+    let wty = m.expY;
+    let st2 = m.ty;
+    let stn2 = m.tn;
+    if kind == 110 {
+        return tc_ctor_none(m, sl, sc);
+    }
+    if wty < 0 && kind != 115 {
+        return diagc(m, 202, 0, sl, sc, 1, "bind it to a variable or pass it where the type is known");
+    }
+    let okty = false;
+    if t_is_num(st2) || st2 == 12 || st2 == 13 || st2 == 15 ||
+       st2 == 21 || st2 == 22 {
+        okty = true;
+    }
+    if kind == 115 {
+        if st2 == 19 || st2 == 20 {
+            return diagc(m, 202, 0, sl, sc, 1, "opt cannot nest v0 (same for result)");
+        }
+        if !okty {
+            m = mbeg(m);
+            m = cpC(m, "cannot infer an opt payload from ");
+            m = tyd(m, st2, stn2);
+            m = diagc(m, 202, 0, sl, sc, 1, "payload infers from num/bool/str/struct/array");
+        }
+    }
+    let k = anon_new(m, st2, stn2);
+    if kind == 115 {
+        m.A1Y[k] = 0 - 1;
+        return set_ty(m, 19, m.A0T[k]);
+    }
+    if kind == 107 {
+        m.A1Y[k] = 0 - 1;
+        return set_ty(m, 20, m.A0T[k]);
+    }
+    return set_ty(m, 20, m.A0T[k]);
+}
+
+// builtin lookup by name seg; m.pln = row or -1
+fn mbi_find(m: P, name: i32) -> P {
+    m.pln = 0 - 1;
+    let i = 0;
+    while i < m.NBI {
+        if m.BIN[i] == name {
+            m.pln = i;
+            return m;
+        }
+        i = i + 1;
+    }
+    return m;
+}
+
+fn parse_expr_nn(m: P) -> P {
+    return parse_expr(m);
+}
+
+// fn call: per-arg want thread + literal cleanups; arity + ty match after
+fn parse_args_f(m: P, frow: i32, np: i32, name: i32, sl: i32, sc: i32) -> P {
+    let saveY = m.expY;
+    let n = 0;
+    let go = true;
+    let aj = 0;
+    while go {
+        go = false;
+        if m.tk != 24 && m.tk != 0 {
+            let want = 0 - 1;
+            if aj < np {
+                want = m.PTY[m.FPP[frow] + aj];
+            }
+            m.expY = want;
+            m = parse_expr(m);
+            m.expY = saveY;
+            // arg ty match (strict + fence); suppress among parse diags
+            if want >= 0 && m.ty != -1 && !ty_same(m, want, 0 - 1, m.ty, m.tn) &&
+               !ty_fence(m, want, 0 - 1, m.ty, m.tn) {
+                m = mbeg(m);
+                m = cpC(m, "argument ");
+                m = cpI32(m, aj + 1);
+                m = cpC(m, " of '");
+                m = seg_eq(m, name, 0, 0);
+                m = cpC(m, "' must be ");
+                m = tyd(m, want, 0 - 1);
+                m = cpC(m, ", got ");
+                m = tyd(m, m.ty, m.tn);
+                m = diagc(m, 202, 0, m.X0L, m.X0C, 1, "no implicit conversion exists; cast<T>(x) or pass the exact type");
+            }
+            aj = aj + 1;
+            n = n + 1;
+            m = adv(m);
+            if m.tk == 29 {
+                m = adv(m);
+                go = true;
+            }
+        }
+    }
+    m = adv(m); // )
+    if n != np {
+        m = mbeg(m);
+        m = cpI32(m, np);
+        m = cpC(m, " arg(s) required");
+        m = diagc(m, 202, 0, m.X0L, m.X0C, 1, "match the declared parameter list exactly");
+    }
+    m.na = n;
+    m = fn_find(m, name);
+    let ret = 0 - 1;
+    let retn = 0 - 1;
+    if m.pln >= 0 {
+        ret = m.FRT[m.pln];
+        retn = m.FRTN[m.pln];
+    }
+    return set_ty(m, ret, retn);
+}
