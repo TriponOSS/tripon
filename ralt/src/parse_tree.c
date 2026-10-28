@@ -177,9 +177,9 @@ static void dump_stmt(FILE *o, Stmt *s, int ind) {
         break;
     case ST_RETURN:
         put_word(o, "RETURN");
-        if (s->cond) {
+        if (s->value) {
             fputc(' ', o);
-            dump_expr(o, s->cond, ind);
+            dump_expr(o, s->value, ind);
         }
         fputc('\n', o);
         break;

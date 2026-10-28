@@ -1,0 +1,1577 @@
+// selfhost/parser.tp - P3.1: the Tripon parser written in Tripon.
+// Bootstrap oracle = `ralt tree` (ralt/src/parse_tree.c + ralt/src/parse.c,
+// frozen behavior): prefix, indented AST dump, one line per node.
+// Architecture: streaming lexer + parser with a tiny by-value Parser struct
+// (only one-token lookahead is ever needed). Statements print straight to
+// stdout; each statement-level expression slot is composed into one byte
+// buffer: BIN/INDEX/FIELD/SPREAD learn their head word only after the base
+// operand is parsed, so the head prefix is INSERTED at the base's start
+// cursor (shift-right), then the tail is appended. Byte order then matches
+// the C dumper exactly. RETURN values are parsed and discarded: the frozen
+// oracle reads Stmt.cond for ST_RETURN while parse.c stores Stmt.value, so
+// `return e;` dumps as bare "RETURN" - mirrored bug-for-bug. No imports:
+// fully self-contained.
+use tier core;
+
+extern "C" {
+    fn getenv(name: str) -> *i8;
+    fn putchar(c: i32) -> i32;
+}
+
+// token kinds (own numbering; mirrors lex.c lexeme shapes)
+//  0 EOF  1 ident  2 int  3 float  4 str
+//  5 fn 6 let 7 const 8 return 9 if 10 else 11 while 12 match
+//  13 struct 14 enum 15 use 16 tier 17 extern 18 true 19 false 20 mut
+//  21 pub 22 cast
+//  23 ( 24 ) 25 [ 26 ] 27 { 28 } 29 , 30 ; 31 : 32 :: 33 . 34 -> 35 =>
+//  36 = 37 += 38 -= 39 *= 40 /= 41 %= 42 == 43 != 44 < 45 > 46 <= 47 >=
+//  48 && 49 || 50 ! 51 + 52 - 53 * 54 / 55 % 56 & 57 ?
+// (58 ** never lexes: lex.c OPS lists "*" before "**", so ** is two stars)
+struct Parser {
+    src: str; n: i32; pos: i32;
+    tk: i32; ts: i32; tl: i32; ival: i64;
+    si: i32;      // struct-init IDENT '{' currently allowed (cond suppresses)
+    out: i32;     // 0 = stdout writer, 1 = compose into buf
+    bl: i32;      // buf length
+    ty: i32; tns: i32; tnl: i32;   // last parse_type result + typedef name
+    buf: [512]u8;
+}
+
+// ---------------- byte helpers ----------------
+
+fn bat(s: str, i: i32, n: i32) -> i32 {
+    if i < 0 || i >= n {
+        return 0;
+    }
+    return cast<i32>(s[i]);
+}
+
+fn is_digit(c: i32) -> bool {
+    return c >= 48 && c <= 57;
+}
+
+fn is_alpha_u(c: i32) -> bool {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95;
+}
+
+fn is_ident(c: i32) -> bool {
+    return is_alpha_u(c) || is_digit(c);
+}
+
+fn is_hex(c: i32) -> bool {
+    return is_digit(c) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
+}
+
+// ---------------- output primitives ----------------
+
+// one byte to the active target
+fn putb(p: Parser, c: i32) -> Parser {
+    if p.out == 0 {
+        putchar(c);
+        return p;
+    }
+    if p.bl < 512 {
+        p.buf[p.bl] = cast<u8>(c);
+        p.bl = p.bl + 1;
+    }
+    return p;
+}
+
+// word to the active target (single struct copy)
+fn putw(p: Parser, s: str) -> Parser {
+    let l = len(s);
+    let i = 0;
+    if p.out == 0 {
+        while i < l {
+            putchar(cast<i32>(s[i]));
+            i = i + 1;
+        }
+        return p;
+    }
+    while i < l {
+        if p.bl < 512 {
+            p.buf[p.bl] = s[i];
+            p.bl = p.bl + 1;
+        }
+        i = i + 1;
+    }
+    return p;
+}
+
+// source bytes [st, st+ln) to the active target
+fn putspan(p: Parser, st: i32, ln: i32) -> Parser {
+    let i = 0;
+    if p.out == 0 {
+        while i < ln {
+            putchar(bat(p.src, st + i, p.n));
+            i = i + 1;
+        }
+        return p;
+    }
+    while i < ln {
+        if p.bl < 512 {
+            p.buf[p.bl] = p.src[st + i];
+            p.bl = p.bl + 1;
+        }
+        i = i + 1;
+    }
+    return p;
+}
+
+// put_word(NULL) prints "?": a failed expect leaves no name bytes
+fn putname(p: Parser, ns: i32, nl: i32) -> Parser {
+    if nl > 0 {
+        return putspan(p, ns, nl);
+    }
+    return putb(p, 63);
+}
+
+// %lld for non-negative values (INT tokens are never negative)
+fn put_i64(p: Parser, v: i64) -> Parser {
+    if v >= 10 {
+        p = put_i64(p, v / 10);
+    }
+    p = putb(p, cast<i32>(48 + v % 10));
+    return p;
+}
+
+fn indent_to(p: Parser, k: i32) -> Parser {
+    let i = 0;
+    while i < k {
+        p = putw(p, "  ");
+        i = i + 1;
+    }
+    return p;
+}
+
+// insert w at cursor s of the compose buffer (shift right), for the head
+// prefix of a node whose base operand is already composed at [s, bl)
+fn insert1(p: Parser, s: i32, w: str) -> Parser {
+    let l = len(w);
+    let i = p.bl;
+    while i > s {
+        if i + l - 1 < 512 {
+            p.buf[i + l - 1] = p.buf[i - 1];
+        }
+        i = i - 1;
+    }
+    let j = 0;
+    while j < l {
+        if s + j < 512 {
+            p.buf[s + j] = w[j];
+        }
+        j = j + 1;
+    }
+    p.bl = p.bl + l;
+    if p.bl > 512 {
+        p.bl = 512;
+    }
+    return p;
+}
+
+// ---------------- expression slot machinery ----------------
+
+fn slot_begin(p: Parser) -> Parser {
+    p.out = 1;
+    p.bl = 0;
+    return p;
+}
+
+fn flush_buf(p: Parser) -> Parser {
+    let i = 0;
+    while i < p.bl {
+        putchar(cast<i32>(p.buf[i]));
+        i = i + 1;
+    }
+    p.bl = 0;
+    return p;
+}
+
+// flush the composed expression to stdout, back to stdout writer
+fn slot_end(p: Parser) -> Parser {
+    p = flush_buf(p);
+    p.out = 0;
+    return p;
+}
+
+// keep the composed bytes, pause composing (scaffolding goes to stdout)
+fn slot_pause(p: Parser) -> Parser {
+    p.out = 0;
+    return p;
+}
+
+// parse + discard (the RETURN-value mirror)
+fn slot_drop(p: Parser) -> Parser {
+    p.bl = 0;
+    p.out = 0;
+    return p;
+}
+
+// ---------------- lexer (mirrors ralt/src/lex.c) ----------------
+
+fn lex_skip(p: Parser) -> Parser {
+    let skip = true;
+    while skip {
+        skip = false;
+        if p.pos < p.n {
+            let c = bat(p.src, p.pos, p.n);
+            if c == 32 || c == 9 || c == 13 || c == 10 {
+                p.pos = p.pos + 1;
+                skip = true;
+            } else if c == 47 && bat(p.src, p.pos + 1, p.n) == 47 {
+                while p.pos < p.n && bat(p.src, p.pos, p.n) != 10 {
+                    p.pos = p.pos + 1;
+                }
+                skip = true;
+            } else if c == 47 && bat(p.src, p.pos + 1, p.n) == 42 {
+                p.pos = p.pos + 2;
+                let inb = true;
+                while inb {
+                    inb = false;
+                    if p.pos < p.n {
+                        if bat(p.src, p.pos, p.n) == 42 && bat(p.src, p.pos + 1, p.n) == 47 {
+                            p.pos = p.pos + 2;
+                        } else {
+                            p.pos = p.pos + 1;
+                            inb = true;
+                        }
+                    }
+                }
+                skip = true;
+            }
+        }
+    }
+    return p;
+}
+
+// keyword test: lexeme [st, st+ln) equals lit (lex.c KEYWORDS spellings)
+fn kw_at(p: Parser, st: i32, ln: i32, lit: str) -> bool {
+    if ln != len(lit) {
+        return false;
+    }
+    let i = 0;
+    while i < ln {
+        if bat(p.src, st + i, p.n) != cast<i32>(lit[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// keyword kind ordinal, 0 = plain ident
+fn kw_kind(p: Parser, st: i32, ln: i32) -> i32 {
+    if kw_at(p, st, ln, "fn") { return 5; }
+    if kw_at(p, st, ln, "let") { return 6; }
+    if kw_at(p, st, ln, "const") { return 7; }
+    if kw_at(p, st, ln, "return") { return 8; }
+    if kw_at(p, st, ln, "if") { return 9; }
+    if kw_at(p, st, ln, "else") { return 10; }
+    if kw_at(p, st, ln, "while") { return 11; }
+    if kw_at(p, st, ln, "match") { return 12; }
+    if kw_at(p, st, ln, "struct") { return 13; }
+    if kw_at(p, st, ln, "enum") { return 14; }
+    if kw_at(p, st, ln, "use") { return 15; }
+    if kw_at(p, st, ln, "tier") { return 16; }
+    if kw_at(p, st, ln, "extern") { return 17; }
+    if kw_at(p, st, ln, "true") { return 18; }
+    if kw_at(p, st, ln, "false") { return 19; }
+    if kw_at(p, st, ln, "mut") { return 20; }
+    if kw_at(p, st, ln, "pub") { return 21; }
+    if kw_at(p, st, ln, "cast") { return 22; }
+    return 0;
+}
+
+fn lex_one(p: Parser) -> Parser {
+    p = lex_skip(p);
+    if p.pos >= p.n {
+        p.tk = 0; p.ts = 0; p.tl = 0; p.ival = 0;
+        return p;
+    }
+    let c = bat(p.src, p.pos, p.n);
+    if is_alpha_u(c) {
+        let st = p.pos;
+        while p.pos < p.n && is_ident(bat(p.src, p.pos, p.n)) {
+            p.pos = p.pos + 1;
+        }
+        let m = p.pos - st;
+        let k = kw_kind(p, st, m);
+        if k > 0 {
+            p.tk = k;
+        } else {
+            p.tk = 1;
+        }
+        p.ts = st; p.tl = m; p.ival = 0;
+        return p;
+    }
+    if is_digit(c) {
+        let pfx = bat(p.src, p.pos + 1, p.n);
+        if c == 48 && (pfx == 120 || pfx == 111 || pfx == 98) {
+            // 0x / 0o / 0b literal
+            let base = 16;
+            if pfx == 111 { base = 8; }
+            if pfx == 98 { base = 2; }
+            let st = p.pos;
+            p.pos = p.pos + 2;
+            let v = cast<i64>(0);
+            let go = true;
+            while go {
+                go = false;
+                if p.pos < p.n {
+                    let d = bat(p.src, p.pos, p.n);
+                    let ok = false;
+                    if d == 95 {
+                        ok = true;
+                    } else {
+                        if base == 16 { ok = is_hex(d); }
+                        if base == 8 { ok = d >= 48 && d <= 55; }
+                        if base == 2 { ok = d == 48 || d == 49; }
+                    }
+                    if ok {
+                        if d != 95 {
+                            let dv = 0;
+                            if d >= 48 && d <= 57 {
+                                dv = d - 48;
+                            } else if d >= 97 {
+                                dv = d - 87;
+                            } else {
+                                dv = d - 55;
+                            }
+                            v = v * cast<i64>(base) + cast<i64>(dv);
+                        }
+                        p.pos = p.pos + 1;
+                        go = true;
+                    }
+                }
+            }
+            p.tk = 2; p.ts = st; p.tl = p.pos - st; p.ival = v;
+            return p;
+        }
+        // decimal / float
+        let st = p.pos;
+        let go = true;
+        while go {
+            go = false;
+            if p.pos < p.n {
+                let d = bat(p.src, p.pos, p.n);
+                if is_digit(d) || d == 95 {
+                    p.pos = p.pos + 1;
+                    go = true;
+                }
+            }
+        }
+        let isf = false;
+        if bat(p.src, p.pos, p.n) == 46 && is_digit(bat(p.src, p.pos + 1, p.n)) {
+            isf = true;
+            p.pos = p.pos + 1;
+            let go2 = true;
+            while go2 {
+                go2 = false;
+                if p.pos < p.n {
+                    let d = bat(p.src, p.pos, p.n);
+                    if is_digit(d) || d == 95 {
+                        p.pos = p.pos + 1;
+                        go2 = true;
+                    }
+                }
+            }
+        }
+        let ep = bat(p.src, p.pos, p.n);
+        let e1 = bat(p.src, p.pos + 1, p.n);
+        let e2 = bat(p.src, p.pos + 2, p.n);
+        if (ep == 101 || ep == 69) && (is_digit(e1) || ((e1 == 43 || e1 == 45) && is_digit(e2))) {
+            isf = true;
+            p.pos = p.pos + 1;
+            if e1 == 43 || e1 == 45 {
+                p.pos = p.pos + 1;
+            }
+            let go3 = true;
+            while go3 {
+                go3 = false;
+                if p.pos < p.n && is_digit(bat(p.src, p.pos, p.n)) {
+                    p.pos = p.pos + 1;
+                    go3 = true;
+                }
+            }
+        }
+        p.ts = st; p.tl = p.pos - st;
+        if isf {
+            p.tk = 3;
+            p.ival = 0;
+            return p;
+        }
+        p.tk = 2;
+        let v = cast<i64>(0);
+        let i = st;
+        while i < p.pos {
+            let d = bat(p.src, i, p.n);
+            if d != 95 {
+                v = v * cast<i64>(10) + cast<i64>(d - 48);
+            }
+            i = i + 1;
+        }
+        p.ival = v;
+        return p;
+    }
+    if c == 34 {
+        // string literal: content unused by the tree dump; scan the extent
+        let st = p.pos;
+        p.pos = p.pos + 1;
+        let sc = true;
+        while sc {
+            sc = false;
+            if p.pos < p.n {
+                let s2 = bat(p.src, p.pos, p.n);
+                if s2 == 34 {
+                    p.pos = p.pos + 1;
+                } else if s2 == 10 {
+                    // newline ends the scan, stays in the stream
+                } else if s2 == 92 {
+                    if bat(p.src, p.pos + 1, p.n) == 0 {
+                        p.pos = p.pos + 1;
+                    } else {
+                        p.pos = p.pos + 2;
+                    }
+                    sc = true;
+                } else {
+                    p.pos = p.pos + 1;
+                    sc = true;
+                }
+            }
+        }
+        p.tk = 4; p.ts = st; p.tl = p.pos - st; p.ival = 0;
+        return p;
+    }
+    // operator grid, lex.c OPS order; "*" single wins before "**"
+    let hit = false;
+    let c1 = bat(p.src, p.pos + 1, p.n);
+    if c == 58 && c1 == 58 { p.tk = 32; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 45 && c1 == 62 { p.tk = 34; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 61 && c1 == 62 { p.tk = 35; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 43 && c1 == 61 { p.tk = 37; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 45 && c1 == 61 { p.tk = 38; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 42 && c1 == 61 { p.tk = 39; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 47 && c1 == 61 { p.tk = 40; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 37 && c1 == 61 { p.tk = 41; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 61 && c1 == 61 { p.tk = 42; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 33 && c1 == 61 { p.tk = 43; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 60 && c1 == 61 { p.tk = 46; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 62 && c1 == 61 { p.tk = 47; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 38 && c1 == 38 { p.tk = 48; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 124 && c1 == 124 { p.tk = 49; p.pos = p.pos + 2; hit = true; }
+    if !hit && c == 40 { p.tk = 23; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 41 { p.tk = 24; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 91 { p.tk = 25; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 93 { p.tk = 26; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 123 { p.tk = 27; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 125 { p.tk = 28; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 44 { p.tk = 29; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 59 { p.tk = 30; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 58 { p.tk = 31; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 46 { p.tk = 33; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 61 { p.tk = 36; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 60 { p.tk = 44; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 62 { p.tk = 45; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 33 { p.tk = 50; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 43 { p.tk = 51; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 45 { p.tk = 52; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 42 { p.tk = 53; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 47 { p.tk = 54; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 37 { p.tk = 55; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 38 { p.tk = 56; p.pos = p.pos + 1; hit = true; }
+    if !hit && c == 63 { p.tk = 57; p.pos = p.pos + 1; hit = true; }
+    if !hit {
+        // unknown character: the C side diags and skips; stdout gets nothing
+        p.pos = p.pos + 1;
+        p = lex_one(p);
+        return p;
+    }
+    p.ts = 0; p.tl = 0; p.ival = 0;
+    return p;
+}
+
+fn adv(p: Parser) -> Parser {
+    if p.tk != 0 {
+        p = lex_one(p);
+    }
+    return p;
+}
+
+// ---------------- type words ----------------
+
+// ty ordinals = C Ty enum row order:
+//   0 i8 1 i16 2 i32 3 i64 4 u8 5 u16 6 u32 7 u64 8 isize 9 usize
+//  10 f32 11 f64 12 bool 13 str 14 () 15 struct 16 enum 17 typedef
+//  18 unset 19 opt 20 result 21 array 22 *i8
+fn put_tyword(p: Parser, t: i32) -> Parser {
+    if t == 0 { return putw(p, "i8"); }
+    if t == 1 { return putw(p, "i16"); }
+    if t == 2 { return putw(p, "i32"); }
+    if t == 3 { return putw(p, "i64"); }
+    if t == 4 { return putw(p, "u8"); }
+    if t == 5 { return putw(p, "u16"); }
+    if t == 6 { return putw(p, "u32"); }
+    if t == 7 { return putw(p, "u64"); }
+    if t == 8 { return putw(p, "isize"); }
+    if t == 9 { return putw(p, "usize"); }
+    if t == 10 { return putw(p, "f32"); }
+    if t == 11 { return putw(p, "f64"); }
+    if t == 12 { return putw(p, "bool"); }
+    if t == 13 { return putw(p, "str"); }
+    if t == 14 { return putw(p, "()"); }
+    if t == 15 { return putw(p, "struct"); }
+    if t == 16 { return putw(p, "enum"); }
+    if t == 17 { return putw(p, "typedef"); }
+    if t == 19 { return putw(p, "opt"); }
+    if t == 20 { return putw(p, "result"); }
+    if t == 21 { return putw(p, "array"); }
+    if t == 22 { return putw(p, "*i8"); }
+    return putw(p, "?");
+}
+
+// dump_ty_annot: "?" for unset; ty word; only struct/enum/typedef carry names
+fn put_annot(p: Parser, t: i32, ns: i32, nl: i32) -> Parser {
+    if t == 18 {
+        return putb(p, 63);
+    }
+    p = put_tyword(p, t);
+    if (t == 15 || t == 16 || t == 17) && nl > 0 {
+        p = putb(p, 32);
+        p = putspan(p, ns, nl);
+    }
+    return p;
+}
+
+// ---------------- operator words ----------------
+
+// BIN head prefixes, one string so a BIN needs a single buffer insert
+fn binprefix(k: i32) -> str {
+    if k == 49 { return "(BIN '||' "; }
+    if k == 48 { return "(BIN '&&' "; }
+    if k == 42 { return "(BIN '==' "; }
+    if k == 43 { return "(BIN '!=' "; }
+    if k == 44 { return "(BIN '<' "; }
+    if k == 45 { return "(BIN '>' "; }
+    if k == 46 { return "(BIN '<=' "; }
+    if k == 47 { return "(BIN '>=' "; }
+    if k == 51 { return "(BIN '+' "; }
+    if k == 52 { return "(BIN '-' "; }
+    if k == 53 { return "(BIN '*' "; }
+    if k == 54 { return "(BIN '/' "; }
+    if k == 55 { return "(BIN '%' "; }
+    return "(BIN '?' ";
+}
+
+// ASSIGN statement op words (tok_kind_word of the assign token)
+fn aopword(k: i32) -> str {
+    if k == 36 { return "'='"; }
+    if k == 37 { return "'+='"; }
+    if k == 38 { return "'-='"; }
+    if k == 39 { return "'*='"; }
+    if k == 40 { return "'/='"; }
+    if k == 41 { return "'%='"; }
+    return "'='";
+}
+
+// ---------------- types ----------------
+
+// parse_type: consumes the type, records p.ty + typedef name span.
+// mode 0: silent (dump_ty_annot prints later from the recorded fields)
+// mode 1: CAST sval display - builtins print "?" (NULL sval), composites
+//         print the canonical name ("[N]elem", "opt_P", "result_P_E")
+// mode 2: canonical display - builtins print their ty word
+// mode 3: opt/result payload display - typedef prints its name, everything
+//         else prints its ty word (array -> "array", opt -> "opt", ...)
+fn parse_type(p: Parser, mode: i32) -> Parser {
+    p.tns = 0;
+    p.tnl = 0;
+    p.ty = 17;
+    if p.tk == 53 {
+        // raw pointer: *i8 (extern islands only on the C side; same shape)
+        p = adv(p);
+        if p.tk == 1 {
+            p = adv(p);
+        }
+        p.ty = 22;
+        if mode == 1 {
+            p = putb(p, 63);
+        }
+        if mode == 2 || mode == 3 {
+            p = put_tyword(p, 22);
+        }
+        return p;
+    }
+    if p.tk == 25 {
+        // [ N ] T -> TY_ARRAY
+        p = adv(p);
+        let alen = cast<i64>(0);
+        if p.tk == 2 {
+            alen = p.ival;
+            p = adv(p);
+        }
+        if p.tk == 26 {
+            p = adv(p);
+        }
+        let emode = 0;
+        if mode == 1 || mode == 2 {
+            emode = 2;
+            p = putb(p, 91);
+            p = put_i64(p, alen);
+            p = putb(p, 93);
+        }
+        p = parse_type(p, emode);
+        if mode == 3 {
+            p = put_tyword(p, 21);
+        }
+        p.ty = 21;
+        p.tns = 0;
+        p.tnl = 0;
+        return p;
+    }
+    if p.tk == 23 {
+        // "()" = unit/void; a lone "(" falls through to the ident expect
+        p = adv(p);
+        if p.tk == 24 {
+            p = adv(p);
+            p.ty = 14;
+            if mode == 1 {
+                p = putb(p, 63);
+            }
+            if mode == 2 || mode == 3 {
+                p = put_tyword(p, 14);
+            }
+            return p;
+        }
+    }
+    if p.tk != 1 {
+        // failed ident expect: typedef shell with no name
+        p.ty = 17;
+        p.tns = 0;
+        p.tnl = 0;
+        if mode >= 1 {
+            p = putb(p, 63);
+        }
+        return p;
+    }
+    let st = p.ts;
+    let ln = p.tl;
+    p = adv(p);
+    let ty = 17;
+    if ln == 2 {
+        if kw_at(p, st, ln, "i8") { ty = 0; }
+        if kw_at(p, st, ln, "u8") { ty = 4; }
+    }
+    if ln == 3 {
+        if kw_at(p, st, ln, "i16") { ty = 1; }
+        if kw_at(p, st, ln, "u16") { ty = 5; }
+        if kw_at(p, st, ln, "i32") { ty = 2; }
+        if kw_at(p, st, ln, "i64") { ty = 3; }
+        if kw_at(p, st, ln, "u32") { ty = 6; }
+        if kw_at(p, st, ln, "u64") { ty = 7; }
+        if kw_at(p, st, ln, "f32") { ty = 10; }
+        if kw_at(p, st, ln, "f64") { ty = 11; }
+        if kw_at(p, st, ln, "str") { ty = 13; }
+    }
+    if ln == 4 {
+        if kw_at(p, st, ln, "bool") { ty = 12; }
+    }
+    if ln == 5 {
+        if kw_at(p, st, ln, "isize") { ty = 8; }
+        if kw_at(p, st, ln, "usize") { ty = 9; }
+    }
+    let isopt = false;
+    let isres = false;
+    if kw_at(p, st, ln, "opt") { isopt = true; }
+    if kw_at(p, st, ln, "result") { isres = true; }
+    if (isopt || isres) && p.tk == 44 {
+        // opt<T> / result<T, E>
+        p = adv(p);
+        let pmode = 0;
+        if mode == 1 || mode == 2 {
+            pmode = 3;
+            if isres {
+                p = putw(p, "result_");
+            } else {
+                p = putw(p, "opt_");
+            }
+        }
+        p = parse_type(p, pmode);
+        if isres {
+            if mode == 1 || mode == 2 {
+                p = putb(p, 95);
+            }
+            if p.tk == 29 {
+                p = adv(p);
+            }
+            p = parse_type(p, pmode);
+        }
+        if p.tk == 45 {
+            p = adv(p);
+        }
+        if mode == 3 {
+            if isres {
+                p = put_tyword(p, 20);
+            } else {
+                p = put_tyword(p, 19);
+            }
+        }
+        if isres {
+            p.ty = 20;
+        } else {
+            p.ty = 19;
+        }
+        p.tns = 0;
+        p.tnl = 0;
+        return p;
+    }
+    p.ty = ty;
+    if ty == 17 {
+        p.tns = st;
+        p.tnl = ln;
+    }
+    if mode == 1 {
+        if ty == 17 {
+            p = putspan(p, st, ln);
+        } else {
+            p = putb(p, 63);
+        }
+    }
+    if mode == 2 || mode == 3 {
+        if ty == 17 {
+            p = putspan(p, st, ln);
+        } else {
+            p = put_tyword(p, ty);
+        }
+    }
+    return p;
+}
+
+// ---------------- expressions ----------------
+
+fn parse_expr(p: Parser) -> Parser {
+    return parse_bin(p, 1);
+}
+
+fn parse_bin(p: Parser, min: i32) -> Parser {
+    let s = p.bl;
+    p = parse_unary(p);
+    let going = true;
+    while going {
+        going = false;
+        let k = p.tk;
+        let prec = 0 - 1;
+        if k == 49 { prec = 1; }
+        if k == 48 { prec = 2; }
+        if k == 42 || k == 43 { prec = 3; }
+        if k == 44 || k == 45 || k == 46 || k == 47 { prec = 4; }
+        if k == 51 || k == 52 { prec = 5; }
+        if k == 53 || k == 54 || k == 55 { prec = 6; }
+        if prec >= min {
+            if prec >= 0 {
+                p = adv(p);
+                p = insert1(p, s, binprefix(k));
+                p = putb(p, 32);
+                p = parse_bin(p, prec + 1);
+                p = putb(p, 41);
+                going = true;
+            }
+        }
+    }
+    return p;
+}
+
+fn parse_unary(p: Parser) -> Parser {
+    if p.tk == 50 || p.tk == 52 || p.tk == 56 {
+        // UN_NOT prints '!', UN_NEG and UN_ADDR both print '-' (frozen dump)
+        p = putw(p, "(UN ");
+        if p.tk == 50 {
+            p = putw(p, "'!'");
+        } else {
+            p = putw(p, "'-'");
+        }
+        p = putb(p, 32);
+        p = adv(p);
+        p = parse_unary(p);
+        p = putb(p, 41);
+        return p;
+    }
+    let s = p.bl;
+    p = parse_primary(p);
+    let going = true;
+    while going {
+        going = false;
+        if p.tk == 33 {
+            // .field
+            p = adv(p);
+            p = insert1(p, s, "(FIELD ");
+            p = putb(p, 32);
+            if p.tk == 1 {
+                p = putspan(p, p.ts, p.tl);
+                p = adv(p);
+            } else {
+                p = putb(p, 63);
+            }
+            p = putb(p, 41);
+            going = true;
+        } else if p.tk == 25 {
+            // [index]
+            p = adv(p);
+            p = insert1(p, s, "(INDEX ");
+            p = putb(p, 32);
+            p = parse_expr(p);
+            if p.tk == 26 {
+                p = adv(p);
+            }
+            p = putb(p, 41);
+            going = true;
+        } else if p.tk == 57 {
+            // ? spread
+            p = adv(p);
+            p = insert1(p, s, "(SPREAD ");
+            p = putb(p, 41);
+            going = true;
+        }
+    }
+    return p;
+}
+
+fn parse_primary(p: Parser) -> Parser {
+    if p.tk == 2 {
+        p = putw(p, "INT ");
+        p = put_i64(p, p.ival);
+        p = adv(p);
+        return p;
+    }
+    if p.tk == 3 {
+        p = putw(p, "FLOAT");
+        p = adv(p);
+        return p;
+    }
+    if p.tk == 4 {
+        p = putw(p, "STR");
+        p = adv(p);
+        return p;
+    }
+    if p.tk == 18 {
+        p = putw(p, "BOOL true");
+        p = adv(p);
+        return p;
+    }
+    if p.tk == 19 {
+        p = putw(p, "BOOL false");
+        p = adv(p);
+        return p;
+    }
+    if p.tk == 1 {
+        let ns = p.ts;
+        let nl = p.tl;
+        p = adv(p);
+        if p.tk == 32 {
+            // Enum::Variant [ ( payloads ) ]
+            p = adv(p);
+            p = putw(p, "(VINST ");
+            p = putspan(p, ns, nl);
+            p = putb(p, 32);
+            if p.tk == 1 {
+                p = putspan(p, p.ts, p.tl);
+                p = adv(p);
+            } else {
+                p = putb(p, 63);
+            }
+            if p.tk == 23 {
+                p = adv(p);
+                let going = true;
+                while going {
+                    going = false;
+                    if p.tk != 24 && p.tk != 0 {
+                        p = putb(p, 32);
+                        p = parse_expr(p);
+                        if p.tk == 29 {
+                            p = adv(p);
+                            going = true;
+                        }
+                    }
+                }
+                if p.tk == 24 {
+                    p = adv(p);
+                }
+            }
+            p = putb(p, 41);
+            return p;
+        }
+        if p.tk == 27 && p.si == 1 {
+            // struct init: Ident { field: expr, ... } / shorthand { field }
+            p = adv(p);
+            p = putw(p, "(INIT ");
+            p = putspan(p, ns, nl);
+            let going = true;
+            while going {
+                going = false;
+                if p.tk != 28 && p.tk != 0 {
+                    let fs = 0;
+                    let fl = 0;
+                    if p.tk == 1 {
+                        fs = p.ts;
+                        fl = p.tl;
+                        p = adv(p);
+                    }
+                    p = putb(p, 32);
+                    p = putname(p, fs, fl);
+                    p = putb(p, 61);
+                    if p.tk == 31 {
+                        p = adv(p);
+                        p = parse_expr(p);
+                    } else {
+                        // shorthand { x } uses the binding x
+                        p = putw(p, "VAR ");
+                        p = putname(p, fs, fl);
+                    }
+                    if p.tk == 29 {
+                        p = adv(p);
+                        going = true;
+                    }
+                }
+            }
+            if p.tk == 28 {
+                p = adv(p);
+            }
+            p = putb(p, 41);
+            return p;
+        }
+        if p.tk == 23 {
+            // call: ident ( args )
+            p = adv(p);
+            p = putw(p, "(CALL ");
+            p = putspan(p, ns, nl);
+            let going = true;
+            while going {
+                going = false;
+                if p.tk != 24 && p.tk != 0 {
+                    p = putb(p, 32);
+                    p = parse_expr(p);
+                    if p.tk == 29 {
+                        p = adv(p);
+                        going = true;
+                    }
+                }
+            }
+            if p.tk == 24 {
+                p = adv(p);
+            }
+            p = putb(p, 41);
+            return p;
+        }
+        p = putw(p, "VAR ");
+        p = putspan(p, ns, nl);
+        return p;
+    }
+    if p.tk == 22 {
+        // cast<T>(expr)
+        p = adv(p);
+        p = putw(p, "(CAST ");
+        if p.tk == 44 {
+            p = adv(p);
+        }
+        p = parse_type(p, 1);
+        if p.tk == 45 {
+            p = adv(p);
+        }
+        if p.tk == 23 {
+            p = adv(p);
+        }
+        p = putb(p, 32);
+        p = parse_expr(p);
+        if p.tk == 24 {
+            p = adv(p);
+        }
+        p = putb(p, 41);
+        return p;
+    }
+    if p.tk == 23 {
+        // paren group: transparent
+        p = adv(p);
+        p = parse_expr(p);
+        if p.tk == 24 {
+            p = adv(p);
+        }
+        return p;
+    }
+    if p.tk == 12 {
+        // match as an expression lands later: C diags and yields INT 0
+        p = adv(p);
+        p = putw(p, "INT 0");
+        return p;
+    }
+    // expected an expression: C diags, advances, yields INT 0
+    p = adv(p);
+    p = putw(p, "INT 0");
+    return p;
+}
+
+// ---------------- statements ----------------
+
+// conditions and match scrutinees: `ident {` would be ambiguous with the
+// following block, so struct inits are suppressed there
+fn parse_cond_expr(p: Parser) -> Parser {
+    let save = p.si;
+    p.si = 0;
+    p = parse_expr(p);
+    p.si = save;
+    return p;
+}
+
+fn parse_var_decl(p: Parser) -> Parser {
+    p = adv(p);
+    let ns = 0;
+    let nl = 0;
+    if p.tk == 1 {
+        ns = p.ts;
+        nl = p.tl;
+        p = adv(p);
+    }
+    p = putw(p, "LET ");
+    p = putname(p, ns, nl);
+    if p.tk == 31 {
+        p = adv(p);
+        p = parse_type(p, 0);
+        p = putw(p, " ty=");
+        p = put_annot(p, p.ty, p.tns, p.tnl);
+    }
+    if p.tk == 36 {
+        p = adv(p);
+        p = putw(p, " =");
+        p = putb(p, 32);
+        p = slot_begin(p);
+        p = parse_expr(p);
+        p = slot_end(p);
+    }
+    if p.tk == 30 {
+        p = adv(p);
+    }
+    p = putb(p, 10);
+    return p;
+}
+
+fn parse_if(p: Parser, ind: i32) -> Parser {
+    p = adv(p);
+    p = putw(p, "IF ");
+    p = slot_begin(p);
+    p = parse_cond_expr(p);
+    p = slot_end(p);
+    p = putb(p, 10);
+    p = parse_block(p, ind + 1);
+    if p.tk == 10 {
+        p = adv(p);
+        p = indent_to(p, ind);
+        p = putw(p, "ELSE\n");
+        if p.tk == 9 {
+            p = indent_to(p, ind + 1);
+            p = parse_if(p, ind + 1);
+        } else {
+            p = indent_to(p, ind + 1);
+            p = putw(p, "BLOCK\n");
+            p = parse_block(p, ind + 2);
+        }
+    }
+    return p;
+}
+
+fn parse_while(p: Parser, ind: i32) -> Parser {
+    p = adv(p);
+    p = putw(p, "WHILE ");
+    p = slot_begin(p);
+    p = parse_cond_expr(p);
+    p = slot_end(p);
+    p = putb(p, 10);
+    p = parse_block(p, ind + 1);
+    return p;
+}
+
+fn parse_pattern(p: Parser) -> Parser {
+    if p.tk == 2 {
+        p = putw(p, "INT ");
+        p = put_i64(p, p.ival);
+        p = adv(p);
+        return p;
+    }
+    if p.tk == 18 {
+        p = putw(p, "BOOL true");
+        p = adv(p);
+        return p;
+    }
+    if p.tk == 19 {
+        p = putw(p, "BOOL false");
+        p = adv(p);
+        return p;
+    }
+    if p.tk != 1 {
+        // unsupported pattern form: pkind stays PAT_WILD, dumps "_"
+        p = adv(p);
+        p = putw(p, "_");
+        return p;
+    }
+    let ns = p.ts;
+    let nl = p.tl;
+    p = adv(p);
+    if nl == 1 && bat(p.src, ns, p.n) == 95 {
+        p = putw(p, "_");
+        return p;
+    }
+    p = putw(p, "VARPAT ");
+    if p.tk == 32 {
+        p = adv(p);
+        p = putspan(p, ns, nl);
+        p = putb(p, 32);
+        if p.tk == 1 {
+            p = putspan(p, p.ts, p.tl);
+            p = adv(p);
+        } else {
+            p = putb(p, 63);
+        }
+    } else {
+        // bare: resolved against the scrutinee, ename prints "-"
+        p = putw(p, "- ");
+        p = putspan(p, ns, nl);
+    }
+    if p.tk == 23 {
+        p = adv(p);
+        let going = true;
+        while going {
+            going = false;
+            if p.tk != 24 && p.tk != 0 {
+                if p.tk == 1 {
+                    p = putb(p, 32);
+                    p = putspan(p, p.ts, p.tl);
+                    p = adv(p);
+                }
+                if p.tk == 29 {
+                    p = adv(p);
+                    going = true;
+                }
+            }
+        }
+        if p.tk == 24 {
+            p = adv(p);
+        }
+    }
+    return p;
+}
+
+fn parse_match(p: Parser, ind: i32) -> Parser {
+    p = adv(p);
+    p = putw(p, "MATCH ");
+    p = slot_begin(p);
+    p = parse_cond_expr(p);
+    p = slot_end(p);
+    p = putb(p, 10);
+    if p.tk == 27 {
+        p = adv(p);
+    }
+    let going = true;
+    while going {
+        going = false;
+        if p.tk != 28 && p.tk != 0 {
+            p = indent_to(p, ind + 1);
+            p = putw(p, "ARM ");
+            p = parse_pattern(p);
+            if p.tk == 35 {
+                p = adv(p);
+            }
+            p = putb(p, 10);
+            p = parse_block(p, ind + 2);
+            if p.tk == 29 {
+                p = adv(p);
+            }
+            going = true;
+        }
+    }
+    if p.tk == 28 {
+        p = adv(p);
+    }
+    return p;
+}
+
+fn parse_stmt(p: Parser, ind: i32) -> Parser {
+    p = indent_to(p, ind);
+    if p.tk == 6 || p.tk == 7 {
+        return parse_var_decl(p);
+    }
+    if p.tk == 8 {
+        p = adv(p);
+        // "RETURN" direct, then the value composed via the buffer slot
+        p = slot_pause(p);
+        p = putw(p, "RETURN");
+        p = slot_end(p);
+        if p.tk != 30 {
+            p = slot_begin(p);
+            p = putb(p, 32);
+            p = parse_expr(p);
+            p = slot_end(p);
+        }
+        if p.tk == 30 {
+            p = adv(p);
+        }
+        p = putb(p, 10);
+        return p;
+    }
+    if p.tk == 9 {
+        return parse_if(p, ind);
+    }
+    if p.tk == 11 {
+        return parse_while(p, ind);
+    }
+    if p.tk == 27 {
+        p = putw(p, "BLOCK\n");
+        return parse_block(p, ind + 1);
+    }
+    if p.tk == 12 {
+        return parse_match(p, ind);
+    }
+    if p.tk == 30 {
+        // empty statement: a no-op ST_BLOCK
+        p = adv(p);
+        p = putw(p, "BLOCK\n");
+        return p;
+    }
+    // expression statement, possibly an assignment
+    p = slot_begin(p);
+    p = parse_expr(p);
+    let isassign = false;
+    let aop = 36;
+    if p.tk == 36 || p.tk == 37 || p.tk == 38 || p.tk == 39 || p.tk == 40 || p.tk == 41 {
+        isassign = true;
+        aop = p.tk;
+        p = adv(p);
+    }
+    if isassign {
+        p = slot_pause(p);
+        p = putw(p, "ASSIGN ");
+        p = putw(p, aopword(aop));
+        p = putb(p, 32);
+        p = flush_buf(p);
+        p = putb(p, 32);
+        p = slot_begin(p);
+        p = parse_expr(p);
+        p = slot_end(p);
+        if p.tk == 30 {
+            p = adv(p);
+        }
+        p = putb(p, 10);
+        return p;
+    }
+    p = slot_pause(p);
+    p = putw(p, "EXPR ");
+    p = slot_end(p);
+    if p.tk == 30 {
+        p = adv(p);
+    }
+    p = putb(p, 10);
+    return p;
+}
+
+// '{' statements '}': the wrapper is not printed; callers unwrap like the
+// C dumper does for fn bodies / if / while / match arms
+fn parse_block(p: Parser, ind: i32) -> Parser {
+    if p.tk == 27 {
+        p = adv(p);
+    }
+    let going = true;
+    while going {
+        going = false;
+        if p.tk != 28 && p.tk != 0 {
+            p = parse_stmt(p, ind);
+            going = true;
+        }
+    }
+    if p.tk == 28 {
+        p = adv(p);
+    }
+    return p;
+}
+
+// ---------------- top level ----------------
+
+// fn proto: params are composed into the buffer while parsing (they print
+// after the whole "FN name ret=..." line, but are parsed before the return
+// type), then flushed after the FN line
+fn parse_fn_proto(p: Parser, ext: i32) -> Parser {
+    if p.tk == 5 {
+        p = adv(p);
+    }
+    let ns = 0;
+    let nl = 0;
+    if p.tk == 1 {
+        ns = p.ts;
+        nl = p.tl;
+        p = adv(p);
+    }
+    p.out = 1;
+    p.bl = 0;
+    if p.tk == 23 {
+        p = adv(p);
+    }
+    let going = true;
+    while going {
+        going = false;
+        if p.tk != 24 && p.tk != 0 {
+            let pns = 0;
+            let pnl = 0;
+            if p.tk == 1 {
+                pns = p.ts;
+                pnl = p.tl;
+                p = adv(p);
+            }
+            if p.tk == 31 {
+                p = adv(p);
+            }
+            p = parse_type(p, 0);
+            p = putw(p, "  PARAM ");
+            p = putname(p, pns, pnl);
+            p = putb(p, 32);
+            p = put_annot(p, p.ty, p.tns, p.tnl);
+            p = putb(p, 10);
+            if p.tk == 29 {
+                p = adv(p);
+                going = true;
+            }
+        }
+    }
+    if p.tk == 24 {
+        p = adv(p);
+    }
+    let rt = 14;
+    let rns = 0;
+    let rnl = 0;
+    if p.tk == 34 {
+        p = adv(p);
+        p = parse_type(p, 0);
+        rt = p.ty;
+        rns = p.tns;
+        rnl = p.tnl;
+    }
+    p.out = 0;
+    if ext == 1 {
+        p = putw(p, "EXTFN ");
+    } else {
+        p = putw(p, "FN ");
+    }
+    p = putname(p, ns, nl);
+    p = putw(p, " ret=");
+    p = put_annot(p, rt, rns, rnl);
+    p = putb(p, 10);
+    p = flush_buf(p);
+    return p;
+}
+
+fn parse_struct(p: Parser) -> Parser {
+    p = adv(p);
+    let ns = 0;
+    let nl = 0;
+    if p.tk == 1 {
+        ns = p.ts;
+        nl = p.tl;
+        p = adv(p);
+    }
+    p = putw(p, "STRUCT ");
+    p = putname(p, ns, nl);
+    p = putb(p, 10);
+    if p.tk == 27 {
+        p = adv(p);
+    }
+    let going = true;
+    while going {
+        going = false;
+        if p.tk != 28 && p.tk != 0 {
+            let fs = 0;
+            let fl = 0;
+            if p.tk == 1 {
+                fs = p.ts;
+                fl = p.tl;
+                p = adv(p);
+            }
+            if p.tk == 31 {
+                p = adv(p);
+            }
+            p = putw(p, "  FIELD ");
+            p = putname(p, fs, fl);
+            p = putb(p, 32);
+            p = parse_type(p, 0);
+            p = put_annot(p, p.ty, p.tns, p.tnl);
+            p = putb(p, 10);
+            if p.tk == 30 {
+                p = adv(p);
+            }
+            going = true;
+        }
+    }
+    if p.tk == 28 {
+        p = adv(p);
+    }
+    return p;
+}
+
+fn parse_enum(p: Parser) -> Parser {
+    p = adv(p);
+    let ns = 0;
+    let nl = 0;
+    if p.tk == 1 {
+        ns = p.ts;
+        nl = p.tl;
+        p = adv(p);
+    }
+    p = putw(p, "ENUM ");
+    p = putname(p, ns, nl);
+    p = putb(p, 10);
+    if p.tk == 27 {
+        p = adv(p);
+    }
+    let going = true;
+    while going {
+        going = false;
+        if p.tk != 28 && p.tk != 0 {
+            let vs = 0;
+            let vl = 0;
+            if p.tk == 1 {
+                vs = p.ts;
+                vl = p.tl;
+                p = adv(p);
+            }
+            p = putw(p, "  VARIANT ");
+            p = putname(p, vs, vl);
+            p = putb(p, 10);
+            if p.tk == 23 {
+                p = adv(p);
+                let pgoing = true;
+                while pgoing {
+                    pgoing = false;
+                    if p.tk != 24 && p.tk != 0 {
+                        p = putw(p, "    PAYLOAD ");
+                        p = parse_type(p, 0);
+                        p = put_annot(p, p.ty, p.tns, p.tnl);
+                        p = putb(p, 10);
+                        if p.tk == 29 {
+                            p = adv(p);
+                            pgoing = true;
+                        }
+                    }
+                }
+                if p.tk == 24 {
+                    p = adv(p);
+                }
+            }
+            if p.tk == 29 {
+                p = adv(p);
+                going = true;
+            }
+        }
+    }
+    if p.tk == 28 {
+        p = adv(p);
+    }
+    return p;
+}
+
+fn main() -> i32 {
+    // annotated str: ST_ASSIGN lacks the extern-fence compat that LET has,
+    // so the getenv *i8 is fenced into str at the binding, not the field
+    let src: str = getenv("TP_SRC");
+    let n = len(src);
+    if n == 0 {
+        return 1;
+    }
+    let p: Parser;
+    p.src = src;
+    p.n = n;
+    p.pos = 0;
+    p.tk = 0;
+    p.ts = 0;
+    p.tl = 0;
+    p.ival = 0;
+    p.si = 1;
+    p.out = 0;
+    p.bl = 0;
+    p.ty = 0;
+    p.tns = 0;
+    p.tnl = 0;
+
+    // shebang: only a leading `#!` is skipped (mirrors lex.c)
+    if n >= 2 && bat(p.src, 0, p.n) == 35 && bat(p.src, 1, p.n) == 33 {
+        while p.pos < p.n && bat(p.src, p.pos, p.n) != 10 {
+            p.pos = p.pos + 1;
+        }
+    }
+
+    p = lex_one(p);
+    let running = true;
+    while running {
+        running = false;
+        let matched = false;
+        if p.tk == 15 {
+            // use tier X ;
+            matched = true;
+            p = adv(p);
+            if p.tk == 16 {
+                p = adv(p);
+            }
+            let tns = 0;
+            let tnl = 0;
+            if p.tk == 1 {
+                tns = p.ts;
+                tnl = p.tl;
+                p = adv(p);
+            }
+            p = putw(p, "TIER ");
+            p = putname(p, tns, tnl);
+            p = putb(p, 10);
+            if p.tk == 30 {
+                p = adv(p);
+            }
+        }
+        if !matched && p.tk == 17 {
+            // extern "C" { fn ... ; }
+            matched = true;
+            p = adv(p);
+            if p.tk == 4 {
+                p = adv(p);
+            }
+            if p.tk == 27 {
+                p = adv(p);
+            }
+            let inblk = true;
+            while inblk {
+                inblk = false;
+                if p.tk != 28 && p.tk != 0 {
+                    p = parse_fn_proto(p, 1);
+                    if p.tk == 30 {
+                        p = adv(p);
+                    }
+                    inblk = true;
+                }
+            }
+            if p.tk == 28 {
+                p = adv(p);
+            }
+        }
+        if !matched && p.tk == 5 {
+            matched = true;
+            p = parse_fn_proto(p, 0);
+            p = parse_block(p, 1);
+        }
+        if !matched && p.tk == 13 {
+            matched = true;
+            p = parse_struct(p);
+        }
+        if !matched && p.tk == 14 {
+            matched = true;
+            p = parse_enum(p);
+        }
+        if !matched {
+            // expected a top-level declaration: C diags and breaks
+        } else {
+            if p.tk != 0 {
+                running = true;
+            }
+        }
+    }
+    return 0;
+}
