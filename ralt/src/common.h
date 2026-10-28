@@ -358,5 +358,7 @@ void doc_file(Arena *a, Decl **decls, int ndecls, FILE *out, bool json); /* doc.
 void lsp_serve(void);                                                    /* lsp.c */
 const char *tok_name(TokKind k);                                        /* util.c */
 void parse_tree_dump(FILE *o, Decl **decls, int ndecls);                 /* parse_tree.c */
+void native_file(Arena *a, Decl **decls, int ndecls, const char *outpath,
+                 bool fast);                                             /* native.c */
 
 #endif

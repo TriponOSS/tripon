@@ -182,6 +182,7 @@ int main(int argc, char **argv) {
 
     const char *file = NULL;
     const char *outname = NULL;
+    const char *backend = "c";
     bool json = false;
     bool fast = false;
     bool ofast = false;
@@ -195,6 +196,7 @@ int main(int argc, char **argv) {
         else if (strcmp(s, "-O") == 0 && i + 1 < argc) { i++; ofast = strcmp(argv[i], "fast") == 0; }
         else if (strcmp(s, "-o") == 0 && i + 1 < argc) outname = argv[++i];
         else if (strcmp(s, "--c") == 0) want_emit = true;
+        else if (strcmp(s, "--backend") == 0 && i + 1 < argc) backend = argv[++i];
         else { fprintf(stderr, "ralt: unknown option %s\n", s); return 2; }
     }
     (void)want_emit;
@@ -315,6 +317,7 @@ int main(int argc, char **argv) {
             return 1;
         }
         mkdir_p("build");
+        int status = 0, st = 0;
         const char *slash = strrchr(file, '/');
         const char *stem = slash ? slash + 1 : file;
         char cpath[1024], binpath[1024];
@@ -324,6 +327,52 @@ int main(int argc, char **argv) {
             snprintf(cpath, sizeof cpath, "build/%.*s.c", stemlen, stem);
         }
         snprintf(binpath, sizeof binpath, "%s", outname ? outname : "build/a.out");
+        if (strcmp(backend, "native") == 0) {
+            /* P4: x86-64 asm backend. `as` assembles, cc only links - no C
+             * compilation in this path. -no-pie: simple absolute refs. */
+            char spath[1024], opath[1024];
+            const char *dot = strrchr(stem, '.');
+            int stemlen = dot ? (int)(dot - stem) : (int)strlen(stem);
+            snprintf(spath, sizeof spath, "build/%.*s.s", stemlen, stem);
+            snprintf(opath, sizeof opath, "build/%.*s.o", stemlen, stem);
+            native_file(a, decls, ndecls, spath, fast);
+            pid_t aspid = fork();
+            if (aspid == 0) {
+                execlp("as", "as", "-o", opath, spath, (char *)NULL);
+                _exit(127);
+            }
+            waitpid(aspid, &status, 0);
+            st = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+            if (st != 0) {
+                fprintf(stderr, "ralt: as exited %d\n", st);
+                return 1;
+            }
+            pid_t ldpid = fork();
+            if (ldpid == 0) {
+                const char *cc = getenv("CC");
+                if (!cc || !*cc) cc = "cc";
+                execlp(cc, cc, "-no-pie", "-o", binpath, opath, "-lm", (char *)NULL);
+                _exit(127);
+            }
+            waitpid(ldpid, &status, 0);
+            st = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+            if (st != 0) {
+                fprintf(stderr, "ralt: native link exited %d\n", st);
+                return 1;
+            }
+            if (strcmp(cmd, "run") == 0) {
+                char **child = malloc(sizeof(char *) * (size_t)argc);
+                int n = 0;
+                child[n++] = (char *)binpath;
+                for (int i = 3; i < argc; i++) child[n++] = argv[i];
+                child[n] = NULL;
+                execv(binpath, child);
+                fprintf(stderr, "ralt: failed to exec %s\n", binpath);
+                return 127;
+            }
+            printf("%s\n", binpath);
+            return 0;
+        }
         codegen_file(a, decls, ndecls, cpath, fast);
 
         /* cc stage: -O0 default (builder speed), -O fast -> -O2; -lm for pow */
@@ -336,9 +385,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "ralt: failed to exec %s (is a C toolchain installed?)\n", cc);
             _exit(127);
         }
-        int status;
         waitpid(pid, &status, 0);
-        int st = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+        st = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
         if (st != 0) {
             fprintf(stderr, "ralt: cc pipeline exited %d\n", st);
             return 1;
