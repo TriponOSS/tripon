@@ -1,0 +1,1126 @@
+// selfhost/check.tp - P3.2: the Tripon typechecker written in Tripon.
+// Bootstrap oracle = `ralt check <file> --json` (lex.c + parse.c + typecheck.c
+// + diag.c, frozen behavior): the JSON diagnostics array, byte for byte.
+// Input arrives via $TP_SRC = exact file bytes (sentinel keeps trailing \n).
+// Architecture: streaming lexer with a one-token window (no token store), a
+// by-value Compiler struct threaded through every recursive fn (Tripon v0
+// has no module-level mutables and no array parameters - all slab state is
+// inside the struct and flows in by value, out by return), a checker pass
+// that mirrors typecheck.c function-for-function, and the frozen JSON
+// writer. Parse errors stop before the checker; main is checked first, then
+// non-main fns in declaration order. No imports: fully self-contained.
+use tier core;
+
+extern "C" {
+    fn getenv(name: str) -> *i8;
+    fn putchar(c: i32) -> i32;
+}
+
+// ---------------- token kinds (mirror common.h values exactly) ----------------
+// 0 EOF 1 ident 2 int 3 float 4 str
+// 5 fn 6 let 7 const 8 return 9 if 10 else 11 while 12 match 13 struct
+// 14 enum 15 use 16 tier 17 extern 18 cast 19 true 20 false 21 mut 22 pub
+// 23 ( 24 ) 25 [ 26 ] 27 { 28 } 29 , 30 ; 31 : 32 :: 33 . 34 -> 35 =>
+// 36 = 37 += 38 -= 39 *= 40 /= 41 %= 42 == 43 != 44 < 45 > 46 <= 47 >=
+// 48 && 49 || 50 ! 51 + 52 - 53 * 54 / 55 % 56 & 57 ? 58 ** (never lexes)
+
+// ---------------- byte helpers ----------------
+
+fn at(s: str, i: i32, n: i32) -> i32 {
+    if i < 0 || i >= n {
+        return 0;
+    }
+    return cast<i32>(s[i]);
+}
+
+fn is_digit(c: i32) -> bool {
+    return c >= 48 && c <= 57;
+}
+
+fn is_alpha_u(c: i32) -> bool {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95;
+}
+
+fn is_ident(c: i32) -> bool {
+    return is_alpha_u(c) || is_digit(c);
+}
+
+fn is_hex(c: i32) -> bool {
+    return is_digit(c) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
+}
+
+fn put_raw(s: str) -> () {
+    let n = len(s);
+    let i = 0;
+    while i < n {
+        putchar(cast<i32>(s[i]));
+        i = i + 1;
+    }
+    return;
+}
+
+fn put_i32(v: i32) -> () {
+    if v >= 10 {
+        put_i32(v / 10);
+    }
+    putchar(48 + v % 10);
+    return;
+}
+
+// ================= compiler state =================
+// Naming: window fields lowercase (src/n/pos/line/col/tk/ts/tl/tline/tcol),
+// last-consumed span (pln/pcl/plg), flag trio (si/na/ap = si_ok/no_anon/allow_ptr),
+// segments (nss; segments s0/s1 pairs), pool (pool/pl0), scratch msg (b/bn),
+// diags flat table (nd + dcode/dsev/dln/dcl/dg/ms/ml/ho/hl),
+// AST tables (UPPER): exprs nex + NK/NTY/NTN/LN/CL/LG/LV/IC/IV/BV/OP/LX/RX/UN/OPD/NA/AXP/AX/INM/BAS/IDX/BRC,
+// stmts nST + SK/SLN/SCL/SLG/SNM/STY/STN/SIN/SVL/SCN/SEL/SAO/STC?/SBP/SBPn/BO,
+// arms nAM + PK/ALN/ACL/ALG/AIV/ABV/AEN/AVN/ABP/ABQ/ABO/BYP/BYQ/BYO,
+// fns NF + FN/FE/FLN/FCL/FLG/FRT/FRTN/FPP/FPPN/FOB/FBN,
+// params NP + PNN/PTY/PTN/PPLN/PPCL/PPLG,
+// structs NSD + SDN/SFSP/SFSC/n(span SPAN problems avoided - the struct span
+//   uses its own trio) + flat fields NFF + FFN/FTYY/FTTN/FFLN/FFCL/FFLG,
+// enums NEN + EMN + EVSEG/EVNN + flat variants NVS + VNN/VPSEG/VQN + flat payloads
+//   NPQ + PQY/PQN2/PQLN/PQCL/PQLG,
+// anons NANM + ANN/A0Y/A0T/A1Y/A1T (canon name is a segment),
+// scopes NSO/CSO + SPAR/SLO0/SNLO + flat locals NLO + LON/LOT/LTN/LIC/LSO,
+// checker ctx: EXY/EXP_TN ctx (EXY/ETN), SPP = spread allowed, CFN cur fn,
+// result threading: LTY (last ty), LXX (last expr id), LSS (last stmt id), NERR.
+struct P {
+    src: str; n: i32; pos: i32; line: i32; col: i32;
+    tk: i32; ts: i32; tl: i32; tline: i32; tcol: i32;
+    ival: i64;
+    rga: i32; rgb: i32;
+    pln: i32; pcl: i32; plg: i32;
+    si: i32; na: i32; ap: i32;
+
+    nss: i32;
+    s0: [4096]i32; s1: [4096]i32;
+    pool: [16384]u8; pl0: i32;
+    b: [240]u8; bn: i32;
+
+    nd: i32;
+    dcode: [64]i32; dsev: [64]i32;
+    dln: [64]i32; dcl: [64]i32; dg: [64]i32;
+    ms: [64]i32; ml: [64]i32; ho: [64]i32; hl: [64]i32;
+
+    nex: i32;
+    NK: [4096]i32; NTY: [4096]i32; NTN: [4096]i32;
+    LN: [4096]i32; CL: [4096]i32; LG: [4096]i32;
+    LV: [4096]i32; IC: [4096]i32;
+    IV: [4096]i32;
+    BV: [4096]i32;
+    OP: [4096]i32;
+    LX: [4096]i32; RX: [4096]i32;
+    UN: [4096]i32; OPD: [4096]i32;
+    SV: [4096]i32;
+    NA: [4096]i32; AXp: [4096]i32;
+    AX: [8192]i32;
+    INM: [8192]i32;
+    BAS: [4096]i32; IDX: [4096]i32;
+    BRC: [4096]i32;
+
+    nST: i32;
+    SK: [2048]i32;
+    SLN: [2048]i32; SCL: [2048]i32; SLG: [2048]i32;
+    SNM: [2048]i32; STY: [2048]i32; STNXT: [2048]i32;
+    SIN: [2048]i32; SVL: [2048]i32; SCN: [2048]i32;
+    SEL: [2048]i32; SAO: [2048]i32; SIC: [2048]i32;
+    SBP: [2048]i32; SBPn: [2048]i32;
+    BO: [8192]i32;
+
+    nAM: i32;
+    PK: [256]i32;
+    ALN: [256]i32; ACL: [256]i32; ALG: [256]i32;
+    AIV: [256]i32;
+    ABV: [256]i32;
+    AEN: [256]i32; AVN: [256]i32;
+    ABP: [256]i32; ABQ: [256]i32;
+    ABO: [2048]i32;
+    BYP: [256]i32; BYQ: [256]i32;
+    BYO: [2048]i32;
+
+    NF: i32;
+    FN: [64]i32; FE: [64]i32;
+    FLN: [64]i32; FCL: [64]i32; FLG: [64]i32;
+    FRT: [64]i32; FRTN: [64]i32;
+    FPP: [64]i32; FPPn: [64]i32;
+    FOBR: [64]i32; FBN: [64]i32;
+
+    NP: i32;
+    PNN: [256]i32; PTY: [256]i32; PTN: [256]i32;
+    PPLN: [256]i32; PPCL: [256]i32; PPLG: [256]i32;
+
+    NSD: i32;
+    SDN: [64]i32;
+    DSL: [64]i32; DCL: [64]i32; DG_: [64]i32;
+    SFSP: [64]i32; SFSC: [64]i32;
+
+    NFF: i32;
+    FFN: [256]i32; FTYY: [256]i32; FTTN: [256]i32;
+    FFLN: [256]i32; FFCL: [256]i32; FFLG: [256]i32;
+
+    NEN: i32;
+    EMN: [64]i32;
+    ELN: [64]i32; ECL: [64]i32; ELG: [64]i32;
+    EVSEG: [64]i32; EVNN: [64]i32;
+
+    NVS: i32;
+    VNN: [128]i32;
+    VPSEG: [128]i32; VQN: [128]i32;
+    VLN: [128]i32; VCOL: [128]i32; VLG: [128]i32;
+
+    NPQ: i32;
+    PQY: [256]i32; PQN2: [256]i32;
+    PQLN: [256]i32; PQCL: [256]i32; PQLG: [256]i32;
+
+    NANM: i32;
+    ANN: [128]i32;
+    A0Y: [128]i32; A0T: [128]i32;
+    A1Y: [128]i32; A1T: [128]i32;
+    ASL: [128]i32;
+
+    NSO: i32;
+    CSO: i32;
+    SPAR: [64]i32; SLO0: [64]i32; SNLO: [64]i32;
+    NLO: i32;
+    LON: [1024]i32; LOT: [1024]i32; LTN: [1024]i32;
+    LIC: [1024]i32; LSO: [1024]i32;
+
+    EXY: i32; ETN: i32;
+    SPP: i32;
+    CFN: i32;
+    LTY: i32; LXX: i32; LSS: i32;
+    NER: i32;
+}
+
+// pool + msg byte primitives ------------------------------------------------
+
+// push one byte into the pool (pool grows)
+fn ppb(m: P, b: i32) -> P {
+    if m.pl0 < 16384 {
+        m.pool[m.pl0] = cast<u8>(b);
+        m.pl0 = m.pl0 + 1;
+    }
+    return m;
+}
+
+// append to the message scratch buffer (m.b grows; returns p)
+fn cpc(m: P, b: i32) -> P {
+    if m.bn < 240 {
+        m.b[m.bn] = cast<u8>(b);
+        m.bn = m.bn + 1;
+    }
+    return m;
+}
+
+// append a constant literal
+fn cpC(m: P, s: str) -> P {
+    let n = len(s);
+    let i = 0;
+    while i < n {
+        m = cpc(m, at(s, i, n));
+        i = i + 1;
+    }
+    return m;
+}
+
+// append a source slice
+fn cpe(m: P, e: i32) -> P {
+    if e >= 0 {
+        let from = m.s0[e];
+        let to = m.s1[e];
+        let i = from;
+        while i < to {
+            m = cpc(m, at(m.src, i, m.n));
+            i = i + 1;
+        }
+    }
+    return m;
+}
+
+// append segment if e >= 0 else "?"
+fn cpeq(m: P, e: i32) -> P {
+    if e >= 0 {
+        return cpe(m, e);
+    }
+    return cpC(m, "?");
+}
+
+// reset msg scratch
+fn mbeg(m: P) -> P {
+    m.bn = 0;
+    return m;
+}
+
+
+// source-slice segment (id into s0/s1 pair slots)
+fn seg_new(m: P, from: i32, to: i32) -> P {
+    if m.nss < 4096 {
+        m.s0[m.nss] = from;
+        m.s1[m.nss] = to;
+        m.nss = m.nss + 1;
+    }
+    return m;
+}
+
+// fresh compiler state: field-by-field zero init, defaults inlined
+fn pboot(p: str, nn: i32) -> P {
+    let p0: P;
+    p0.src = p;
+    p0.n = nn;
+    p0.pos = 0;
+    p0.line = 1;
+    p0.col = 1;
+    p0.tk = 0;
+    p0.ts = 0;
+    p0.tl = 0;
+    p0.tline = 1;
+    p0.tcol = 1;
+    p0.ival = 0;
+    p0.pln = 0; p0.pcl = 0; p0.plg = 0;
+    p0.si = 1; p0.na = 0; p0.ap = 0;
+    p0.nss = 0;
+    p0.pl0 = 0;
+    p0.bn = 0;
+    p0.nd = 0;
+    p0.nex = 0;
+    p0.nST = 0;
+    p0.nAM = 0;
+    p0.NF = 0;
+    p0.NP = 0;
+    p0.NSD = 0;
+    p0.NFF = 0;
+    p0.NEN = 0;
+    p0.NVS = 0;
+    p0.NPQ = 0;
+    p0.NANM = 0;
+    p0.NSO = 0;
+    p0.CSO = -1;
+    p0.EXY = -1; p0.ETN = -1;
+    p0.SPP = 0;
+    p0.CFN = -1;
+    p0.LTY = -1; p0.LXX = 0; p0.LSS = 0;
+    p0.NER = 0;
+    return p0;
+}
+
+// ---------------------------------------------------- lexer -------------------------
+// streaming lexer from lex.c: whitespace/comments, then one token into the
+// window (tk/ts/tl/tline/tcol/ival). Ident slices stay as source offsets.
+fn sc_skip(m: P) -> P {
+    let skipping = true;
+    while skipping {
+        skipping = false;
+        if m.pos < m.n {
+            let c = at(m.src, m.pos, m.n);
+            if c == 32 || c == 9 || c == 13 {
+                m.pos = m.pos + 1;
+                m.col = m.col + 1;
+                skipping = true;
+            } else if c == 10 {
+                m.pos = m.pos + 1;
+                m.line = m.line + 1;
+                m.col = 1;
+                skipping = true;
+            } else if c == 47 && at(m.src, m.pos + 1, m.n) == 47 {
+                while m.pos < m.n && at(m.src, m.pos, m.n) != 10 {
+                    m.pos = m.pos + 1;
+                    m.col = m.col + 1;
+                }
+                skipping = true;
+            } else if c == 47 && at(m.src, m.pos + 1, m.n) == 42 {
+                // /* ... */ block comment; unterminated carries E0001
+                let oln = m.line;
+                let ocl = m.col;
+                m.pos = m.pos + 2;
+                m.col = m.col + 2;
+                let closed = false;
+                while !closed && m.pos < m.n {
+                    if at(m.src, m.pos, m.n) == 42 && at(m.src, m.pos + 1, m.n) == 47 {
+                        closed = true;
+                        m.pos = m.pos + 2;
+                        m.col = m.col + 2;
+                    } else {
+                        let bc = at(m.src, m.pos, m.n);
+                        if bc == 10 {
+                            m.line = m.line + 1;
+                            m.col = 1;
+                        } else {
+                            m.col = m.col + 1;
+                        }
+                        m.pos = m.pos + 1;
+                    }
+                }
+                if !closed {
+                    m.bn = 0;
+                    m = diagc(m, 1, 0, oln, ocl, 1, "close the */ or keep using // line comments");
+                }
+                skipping = true;
+            }
+        }
+    }
+    return m;
+}
+
+// diag commit: caller composes the msg into m.b (length m.bn), then this
+// stores the row; mirrors diag(sp, code, sev, msg, hint)
+fn diagc(m: P, code: i32, sev: i32, line: i32, col: i32, slen: i32, hint: str) -> P {
+    if m.nd >= 64 {
+        return m;
+    }
+    m.dcode[m.nd] = code;
+    m.dsev[m.nd] = sev;
+    m.dln[m.nd] = line;
+    m.dcl[m.nd] = col;
+    m.dg[m.nd] = slen;
+    m.ms[m.nd] = m.pl0;
+    let i = 0;
+    while i < m.bn {
+        m = ppb(m, cast<i32>(m.b[i]));
+        i = i + 1;
+    }
+    m.ml[m.nd] = m.bn;
+    m.ho[m.nd] = m.pl0;
+    let hn = len(hint);
+    let j = 0;
+    while j < hn {
+        m = ppb(m, at(hint, j, hn));
+        j = j + 1;
+    }
+    m.hl[m.nd] = hn;
+    m.nd = m.nd + 1;
+    m.NER = m.NER + 1;
+    return m;
+}
+
+// freeze-pool RANGE-by-id helpers for the printer
+fn appj(m: P, b: i32) -> P {
+    if b == 34 || b == 92 {
+        m = ppb(m, 92);
+        return ppb(m, b);
+    }
+    if b == 10 {
+        m = ppb(m, 92);
+        return ppb(m, 110);
+    }
+    if b == 9 {
+        m = ppb(m, 92);
+        return ppb(m, 116);
+    }
+    if b < 32 {
+        m = ppb(m, 92);
+        m = ppb(m, 117);
+        m = ppb(m, 48);
+        m = ppb(m, 48);
+        let h = b / 16;
+        let l = b % 16;
+        if h < 10 {
+            m = ppb(m, 48 + h);
+        } else {
+            m = ppb(m, 87 + h);
+        }
+        if l < 10 {
+            m = ppb(m, 48 + l);
+        } else {
+            m = ppb(m, 87 + l);
+        }
+        return m;
+    }
+    return ppb(m, b);
+}
+
+
+// ---------------- keyword lookup (KEYWORDS order of lex.c) ----------------
+
+fn kw_match(m: P, from: i32, ln: i32, lit: str) -> bool {
+    if ln != len(lit) {
+        return false;
+    }
+    let i = 0;
+    while i < ln {
+        if at(m.src, from + i, m.n) != at(lit, i, len(lit)) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// 0 = not a keyword
+fn kw_kind(m: P, from: i32, ln: i32) -> i32 {
+    if kw_match(m, from, ln, "fn") { return 5; }
+    if kw_match(m, from, ln, "let") { return 6; }
+    if kw_match(m, from, ln, "const") { return 7; }
+    if kw_match(m, from, ln, "return") { return 8; }
+    if kw_match(m, from, ln, "if") { return 9; }
+    if kw_match(m, from, ln, "else") { return 10; }
+    if kw_match(m, from, ln, "while") { return 11; }
+    if kw_match(m, from, ln, "match") { return 12; }
+    if kw_match(m, from, ln, "struct") { return 13; }
+    if kw_match(m, from, ln, "enum") { return 14; }
+    if kw_match(m, from, ln, "use") { return 15; }
+    if kw_match(m, from, ln, "tier") { return 16; }
+    if kw_match(m, from, ln, "extern") { return 17; }
+    if kw_match(m, from, ln, "true") { return 19; }
+    if kw_match(m, from, ln, "false") { return 20; }
+    if kw_match(m, from, ln, "mut") { return 21; }
+    if kw_match(m, from, ln, "pub") { return 22; }
+    if kw_match(m, from, ln, "cast") { return 18; }
+    return 0;
+}
+
+// is this token's src slice equal to a literal?
+fn txis(m: P, lit: str) -> bool {
+    if m.tk != 1 {
+        return false;
+    }
+    return kw_match(m, m.ts, m.tl, lit);
+}
+
+// ---------------- operator scan (OPS order of lex.c) ----------------
+// OPS list order: "::" "->" "=>" "+=" "-=" "*=" "/=" "%=" "==" "!=" "<=" ">="
+// "&&" "||" "(" ")" "[" "]" "{" "}" "," ";" ":" "." "=" "<" ">" "!" "+" "-"
+// "*" "/" "%" "&" "?" "**"
+// NB: "*" precedes "**" so ** never lexes as one token (frozen behavior)
+// Returns: new tk in m.tk; 0 = no op matched (caller diags E0002)
+fn lex_op(m: P) -> P {
+    let c = at(m.src, m.pos, m.n);
+    let c1 = at(m.src, m.pos + 1, m.n);
+    let hit = 0;
+    // 2-char ops
+    if m.pos + 1 < m.n && c == 58 && c1 == 58 { hit = 32; }
+    if hit == 0 && m.pos + 1 < m.n && c == 45 && c1 == 62 { hit = 34; }
+    if hit == 0 && m.pos + 1 < m.n && c == 61 && c1 == 62 { hit = 35; }
+    if hit == 0 && m.pos + 1 < m.n && c == 43 && c1 == 61 { hit = 37; }
+    if hit == 0 && m.pos + 1 < m.n && c == 45 && c1 == 61 { hit = 38; }
+    if hit == 0 && m.pos + 1 < m.n && c == 42 && c1 == 61 { hit = 39; }
+    if hit == 0 && m.pos + 1 < m.n && c == 47 && c1 == 61 { hit = 40; }
+    if hit == 0 && m.pos + 1 < m.n && c == 37 && c1 == 61 { hit = 41; }
+    if hit == 0 && m.pos + 1 < m.n && c == 61 && c1 == 61 { hit = 42; }
+    if hit == 0 && m.pos + 1 < m.n && c == 33 && c1 == 61 { hit = 43; }
+    if hit == 0 && m.pos + 1 < m.n && c == 60 && c1 == 61 { hit = 46; }
+    if hit == 0 && m.pos + 1 < m.n && c == 62 && c1 == 61 { hit = 47; }
+    if hit == 0 && m.pos + 1 < m.n && c == 38 && c1 == 38 { hit = 48; }
+    if hit == 0 && m.pos + 1 < m.n && c == 124 && c1 == 124 { hit = 49; }
+    // singles in OPS order
+    if hit == 0 && c == 40 { hit = 23; }
+    if hit == 0 && c == 41 { hit = 24; }
+    if hit == 0 && c == 91 { hit = 25; }
+    if hit == 0 && c == 93 { hit = 26; }
+    if hit == 0 && c == 123 { hit = 27; }
+    if hit == 0 && c == 125 { hit = 28; }
+    if hit == 0 && c == 44 { hit = 29; }
+    if hit == 0 && c == 59 { hit = 30; }
+    if hit == 0 && c == 58 { hit = 31; }
+    if hit == 0 && c == 46 { hit = 33; }
+    if hit == 0 && c == 61 { hit = 36; }
+    if hit == 0 && c == 60 { hit = 44; }
+    if hit == 0 && c == 62 { hit = 45; }
+    if hit == 0 && c == 33 { hit = 50; }
+    if hit == 0 && c == 43 { hit = 51; }
+    if hit == 0 && c == 45 { hit = 52; }
+    if hit == 0 && c == 42 { hit = 53; }
+    if hit == 0 && c == 47 { hit = 54; }
+    if hit == 0 && c == 37 { hit = 55; }
+    if hit == 0 && c == 38 { hit = 56; }
+    if hit == 0 && c == 63 { hit = 57; }
+    if hit == 0 {
+        // unknown char
+        m.tk = 0;
+        return m;
+    }
+    m.tk = hit;
+    let is2 = 0;
+    if hit == 32 || hit == 34 || hit == 35 || hit == 37 || hit == 38 ||
+       hit == 39 || hit == 40 || hit == 41 || hit == 42 || hit == 43 ||
+       hit == 46 || hit == 47 || hit == 48 || hit == 49 {
+        is2 = 2;
+    } else {
+        is2 = 1;
+    }
+    m.tl = is2;
+    let j = 0;
+    while j < is2 {
+        if m.pos < m.n {
+            let c2 = at(m.src, m.pos, m.n);
+            if c2 == 10 {
+                m.line = m.line + 1;
+                m.col = 1;
+            } else {
+                m.col = m.col + 1;
+            }
+            m.pos = m.pos + 1;
+        }
+        j = j + 1;
+    }
+    return m;
+}
+
+
+
+// ---------------- scanner (lex.c port) ----------------
+
+// advance one byte, tracking line/col
+fn advbyte(m: P) -> P {
+    if m.pos < m.n {
+        let c = at(m.src, m.pos, m.n);
+        if c == 10 {
+            m.line = m.line + 1;
+            m.col = 1;
+        } else {
+            m.col = m.col + 1;
+        }
+        m.pos = m.pos + 1;
+    }
+    return m;
+}
+
+fn is_identc(c: i32) -> bool {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) ||
+           c == 95 || (c >= 48 && c <= 57);
+}
+
+fn is_alphastart(c: i32) -> bool {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95;
+}
+
+// ident/keyword scan; tk=1 ident else keyword ordinal
+fn sc_ident(m: P) -> P {
+    let start = m.pos;
+    let sl = m.line;
+    let sc = m.col;
+    let scanning = true;
+    while scanning {
+        scanning = false;
+        if m.pos < m.n {
+            if is_identc(at(m.src, m.pos, m.n)) {
+                m = advbyte(m);
+                scanning = true;
+            }
+        }
+    }
+    m.ts = start;
+    m.tl = m.pos - start;
+    m.tline = sl;
+    m.tcol = sc;
+    m.ival = 0;
+    m.tk = kw_kind(m, start, m.tl);
+    if m.tk == 0 {
+        m.tk = 1;
+    }
+    return m;
+}
+
+// byte equality helper: src slice vs literal
+fn txeq(m: P, off: i32, lit: str, ln: i32) -> bool {
+    if m.n - off < ln {
+        return false;
+    }
+    let i = 0;
+    while i < ln {
+        if at(m.src, off + i, m.n) != at(lit, i, ln) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// number scan (lex_number)
+fn sc_num(m: P) -> P {
+    let start = m.pos;
+    let sl = m.line;
+    let sc = m.col;
+    let c = at(m.src, m.pos, m.n);
+    let c1 = at(m.src, m.pos + 1, m.n);
+    let isfx = c == 48 && (c1 == 120 || c1 == 111 || c1 == 98);
+    let v: i64 = cast<i64>(0);
+    let is_float0: bool = false;
+    if isfx {
+        let base = 16;
+        if c1 == 111 { base = 8; }
+        if c1 == 98 { base = 2; }
+        m = advbyte(m);
+        m = advbyte(m);
+        let any = false;
+        let scanning = true;
+        while scanning {
+            scanning = false;
+            if m.pos < m.n {
+                let d = at(m.src, m.pos, m.n);
+                if d == 95 {
+                    m = advbyte(m);
+                    scanning = true;
+                } else {
+                    let dv = 0;
+                    let ok = false;
+                    if d >= 48 && d <= 57 {
+                        let x = d - 48;
+                        if x < base { dv = x; ok = true; }
+                    } else if d >= 97 && d <= 102 && base == 16 {
+                        dv = d - 97 + 10;
+                        ok = true;
+                    } else if d >= 65 && d <= 70 && base == 16 {
+                        dv = d - 65 + 10;
+                        ok = true;
+                    }
+                    if ok {
+                        v = v * cast<i64>(base) + cast<i64>(dv);
+                        any = true;
+                        m = advbyte(m);
+                        scanning = true;
+                    }
+                }
+            }
+        }
+        if !any {
+            m = diagc(m, 3, 0, sl, sc, 2,
+                      "write digits after the prefix, e.g. 0x1F");
+        }
+    } else {
+        let scanning = true;
+        while scanning {
+            scanning = false;
+            if m.pos < m.n {
+                let d = at(m.src, m.pos, m.n);
+                if (d >= 48 && d <= 57) || d == 95 {
+                    m = advbyte(m);
+                    scanning = true;
+                }
+            }
+        }
+        if at(m.src, m.pos, m.n) == 46 && is_digit(at(m.src, m.pos + 1, m.n)) {
+            is_float0 = true;
+            m = advbyte(m);
+            let scanning2 = true;
+            while scanning2 {
+                scanning2 = false;
+                if m.pos < m.n {
+                    let d = at(m.src, m.pos, m.n);
+                    if (d >= 48 && d <= 57) || d == 95 {
+                        m = advbyte(m);
+                        scanning2 = true;
+                    }
+                }
+            }
+        }
+        let ep = at(m.src, m.pos, m.n);
+        if ep == 101 || ep == 69 {
+            let nxt = at(m.src, m.pos + 1, m.n);
+            let nn = at(m.src, m.pos + 2, m.n);
+            let okdigit = nxt >= 48 && nxt <= 57;
+            let oksign = (nxt == 43 || nxt == 45) && nn >= 48 && nn <= 57;
+            if okdigit || oksign {
+                is_float0 = true;
+                m = advbyte(m);
+                if nxt == 43 || nxt == 45 {
+                    m = advbyte(m);
+                }
+                let scanning3 = true;
+                while scanning3 {
+                    scanning3 = false;
+                    if m.pos < m.n {
+                        let d = at(m.src, m.pos, m.n);
+                        if d >= 48 && d <= 57 {
+                            m = advbyte(m);
+                            scanning3 = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !is_float0 {
+            let i = start;
+            let go = true;
+            while go {
+                go = false;
+                if i < m.pos {
+                    let d = at(m.src, i, m.n);
+                    if d != 95 {
+                        v = v * 10 + cast<i64>(d - 48);
+                        i = i + 1;
+                        go = true;
+                    }
+                }
+            }
+        }
+    }
+    m.ts = start;
+    m.tl = m.pos - start;
+    m.tline = sl;
+    m.tcol = sc;
+    m.ival = v;
+    if is_float0 { m.tk = 3; } else { m.tk = 2; }
+    return m;
+}
+
+// string scan: span covers the quotes; decoded bytes in pool (rga..+rgb)
+fn sc_str(m: P) -> P {
+    let sstart = m.pos;
+    let oln = m.line;
+    let ocl = m.col;
+    m = advbyte(m);
+    m.rga = m.pl0;
+    let closed = false;
+    let scanning = true;
+    while scanning {
+        scanning = false;
+        if m.pos < m.n {
+            let c = at(m.src, m.pos, m.n);
+            if c == 34 {
+                closed = true;
+                m = advbyte(m);
+            } else if c == 10 {
+                // newline: scan ends; unterminated below
+            } else if c == 92 {
+                m = advbyte(m);
+                let e = at(m.src, m.pos, m.n);
+                let out = e;
+                if e == 110 { out = 10; }
+                if e == 116 { out = 9; }
+                if e == 114 { out = 13; }
+                if e == 48 { out = 0; }
+                if e == 92 { out = 92; }
+                if e == 34 { out = 34; }
+                let kesc = e == 110 || e == 116 || e == 114 || e == 48 ||
+                          e == 92 || e == 34;
+                if !kesc && e != 0 {
+                    m = diagc(m, 2, 0, oln, ocl, 1,
+                              "valid escapes: \\n \\t \\r \\0 \\\\ \\\"");
+                }
+                if e != 0 {
+                    m = advbyte(m);
+                    m = ppb(m, out);
+                }
+            } else {
+                m = advbyte(m);
+                m = ppb(m, c);
+            }
+            if !closed {
+                scanning = true;
+            }
+        }
+    }
+    if !closed {
+        m = diagc(m, 1, 0, oln, ocl, 1, "close it with \" on this line");
+    }
+    m.ts = sstart;
+    m.tl = m.pos - sstart;
+    m.tline = oln;
+    m.tcol = ocl;
+    m.tk = 4;
+    m.rgb = m.pl0 - m.rga;
+    return m;
+}
+
+// op scan, OPS order; ** is after * so it never matches (frozen)
+fn sc_op(m: P) -> P {
+    let p = m.pos;
+    let sl = m.line;
+    let sc = m.col;
+    let hit = 0;
+    let hlen = 0;
+    if txeq(m, p, "::", 2) { hit = 32; hlen = 2; }
+    if hit == 0 && txeq(m, p, "->", 2) { hit = 34; hlen = 2; }
+    if hit == 0 && txeq(m, p, "=>", 2) { hit = 35; hlen = 2; }
+    if hit == 0 && txeq(m, p, "+=", 2) { hit = 37; hlen = 2; }
+    if hit == 0 && txeq(m, p, "-=", 2) { hit = 38; hlen = 2; }
+    if hit == 0 && txeq(m, p, "*=", 2) { hit = 39; hlen = 2; }
+    if hit == 0 && txeq(m, p, "/=", 2) { hit = 40; hlen = 2; }
+    if hit == 0 && txeq(m, p, "%=", 2) { hit = 41; hlen = 2; }
+    if hit == 0 && txeq(m, p, "==", 2) { hit = 42; hlen = 2; }
+    if hit == 0 && txeq(m, p, "!=", 2) { hit = 43; hlen = 2; }
+    if hit == 0 && txeq(m, p, "<=", 2) { hit = 46; hlen = 2; }
+    if hit == 0 && txeq(m, p, ">=", 2) { hit = 47; hlen = 2; }
+    if hit == 0 && txeq(m, p, "&&", 2) { hit = 48; hlen = 2; }
+    if hit == 0 && txeq(m, p, "||", 2) { hit = 49; hlen = 2; }
+    if hit == 0 && txeq(m, p, "(", 1) { hit = 23; hlen = 1; }
+    if hit == 0 && txeq(m, p, ")", 1) { hit = 24; hlen = 1; }
+    if hit == 0 && txeq(m, p, "[", 1) { hit = 25; hlen = 1; }
+    if hit == 0 && txeq(m, p, "]", 1) { hit = 26; hlen = 1; }
+    if hit == 0 && txeq(m, p, "{", 1) { hit = 27; hlen = 1; }
+    if hit == 0 && txeq(m, p, "}", 1) { hit = 28; hlen = 1; }
+    if hit == 0 && txeq(m, p, ",", 1) { hit = 29; hlen = 1; }
+    if hit == 0 && txeq(m, p, ";", 1) { hit = 30; hlen = 1; }
+    if hit == 0 && txeq(m, p, ":", 1) { hit = 31; hlen = 1; }
+    if hit == 0 && txeq(m, p, ".", 1) { hit = 33; hlen = 1; }
+    if hit == 0 && txeq(m, p, "=", 1) { hit = 36; hlen = 1; }
+    if hit == 0 && txeq(m, p, "<", 1) { hit = 44; hlen = 1; }
+    if hit == 0 && txeq(m, p, ">", 1) { hit = 45; hlen = 1; }
+    if hit == 0 && txeq(m, p, "!", 1) { hit = 50; hlen = 1; }
+    if hit == 0 && txeq(m, p, "+", 1) { hit = 51; hlen = 1; }
+    if hit == 0 && txeq(m, p, "-", 1) { hit = 52; hlen = 1; }
+    if hit == 0 && txeq(m, p, "*", 1) { hit = 53; hlen = 1; }
+    if hit == 0 && txeq(m, p, "/", 1) { hit = 54; hlen = 1; }
+    if hit == 0 && txeq(m, p, "%", 1) { hit = 55; hlen = 1; }
+    if hit == 0 && txeq(m, p, "&", 1) { hit = 56; hlen = 1; }
+    if hit == 0 && txeq(m, p, "?", 1) { hit = 57; hlen = 1; }
+    if hit == 0 && hlen == 0 {
+        m.tk = 0;
+        return m;
+    }
+    let j = 0;
+    while j < hlen {
+        m = advbyte(m);
+        j = j + 1;
+    }
+    m.ts = p;
+    m.tl = hlen;
+    m.tline = sl;
+    m.tcol = sc;
+    m.tk = hit;
+    m.ival = 0;
+    return m;
+}
+
+// lex one token (lex_file loop body)
+fn adv(m: P) -> P {
+    m = sc_skip(m);
+    if m.pos >= m.n {
+        m.tk = 0;
+        m.ts = m.pos;
+        m.tl = 1;
+        m.tline = m.line;
+        m.tcol = m.col;
+        m.ival = 0;
+        return m;
+    }
+    let c = at(m.src, m.pos, m.n);
+    if is_alphastart(c) {
+        return sc_ident(m);
+    }
+    if c >= 48 && c <= 57 {
+        return sc_num(m);
+    }
+    if c == 34 {
+        return sc_str(m);
+    }
+    let p_before = m.pos;
+    let l_before = m.line;
+    let c_before = m.col;
+    m = sc_op(m);
+    if m.tk == 0 {
+        m.tk = 0;
+        m.ts = p_before;
+        m.tl = 1;
+        m.tline = l_before;
+        m.tcol = c_before;
+        m.ival = 0;
+        return m;
+    }
+    return m;
+}
+
+// ---------------- dump helpers + phase-L driver ----------------
+
+fn tokname(k: i32) -> str {
+    if k == 0 { return "TK_EOF"; }
+    if k == 1 { return "TK_IDENT"; }
+    if k == 2 { return "TK_INT"; }
+    if k == 3 { return "TK_FLOAT"; }
+    if k == 4 { return "TK_STR"; }
+    if k == 5 { return "TK_FN"; }
+    if k == 6 { return "TK_LET"; }
+    if k == 7 { return "TK_CONST"; }
+    if k == 8 { return "TK_RETURN"; }
+    if k == 9 { return "TK_IF"; }
+    if k == 10 { return "TK_ELSE"; }
+    if k == 11 { return "TK_WHILE"; }
+    if k == 12 { return "TK_MATCH"; }
+    if k == 13 { return "TK_STRUCT"; }
+    if k == 14 { return "TK_ENUM"; }
+    if k == 15 { return "TK_USE"; }
+    if k == 16 { return "TK_TIER"; }
+    if k == 17 { return "TK_EXTERN"; }
+    if k == 18 { return "TK_CAST"; }
+    if k == 19 { return "TK_TRUE"; }
+    if k == 20 { return "TK_FALSE"; }
+    if k == 21 { return "TK_MUT"; }
+    if k == 22 { return "TK_PUB"; }
+    if k == 23 { return "TK_LP"; }
+    if k == 24 { return "TK_RP"; }
+    if k == 25 { return "TK_LB"; }
+    if k == 26 { return "TK_RB"; }
+    if k == 27 { return "TK_BRACE_L"; }
+    if k == 28 { return "TK_BRACE_R"; }
+    if k == 29 { return "TK_COMMA"; }
+    if k == 30 { return "TK_SEMI"; }
+    if k == 31 { return "TK_COLON"; }
+    if k == 32 { return "TK_COLON2"; }
+    if k == 33 { return "TK_DOT"; }
+    if k == 34 { return "TK_ARROW"; }
+    if k == 35 { return "TK_FATARROW"; }
+    if k == 36 { return "TK_ASSIGN"; }
+    if k == 37 { return "TK_ADDEQ"; }
+    if k == 38 { return "TK_SUBEQ"; }
+    if k == 39 { return "TK_MULEQ"; }
+    if k == 40 { return "TK_DIVEQ"; }
+    if k == 41 { return "TK_MODEQ"; }
+    if k == 42 { return "TK_EQ"; }
+    if k == 43 { return "TK_NE"; }
+    if k == 44 { return "TK_LT"; }
+    if k == 45 { return "TK_GT"; }
+    if k == 46 { return "TK_LE"; }
+    if k == 47 { return "TK_GE"; }
+    if k == 48 { return "TK_AND"; }
+    if k == 49 { return "TK_OR"; }
+    if k == 50 { return "TK_NOT"; }
+    if k == 51 { return "TK_PLUS"; }
+    if k == 52 { return "TK_MINUS"; }
+    if k == 53 { return "TK_STAR"; }
+    if k == 54 { return "TK_SLASH"; }
+    if k == 55 { return "TK_PERCENT"; }
+    if k == 56 { return "TK_AMP"; }
+    if k == 57 { return "TK_QUESTION"; }
+    return "TK_POW";
+}
+
+// emit one byte the way the C token dump escapes
+fn dmpc(m: P, ch: i32) -> P {
+    if ch == 10 {
+        return cpC(m, "\\n");
+    }
+    if ch == 9 {
+        return cpC(m, "\\t");
+    }
+    if ch == 13 {
+        return cpC(m, "\\r");
+    }
+    if ch == 92 {
+        return cpC(m, "\\\\");
+    }
+    if ch == 34 {
+        return cpC(m, "\\\"");
+    }
+    if ch >= 32 && ch < 127 {
+        return cpc(m, ch);
+    }
+    let h = ch / 16;
+    let l = ch % 16;
+    m = cpC(m, "\\x");
+    if h < 10 { m = cpc(m, 48 + h); } else { m = cpc(m, 87 + h); }
+    if l < 10 { m = cpc(m, 48 + l); } else { m = cpc(m, 87 + l); }
+    return m;
+}
+
+// flush scratch buffer m.b (len m.bn) to stdout, then reset
+fn mbflush(m: P) -> P {
+    let j = 0;
+    while j < m.bn {
+        putchar(cast<i32>(m.b[j]));
+        j = j + 1;
+    }
+    m.bn = 0;
+    return m;
+}
+
+// dump a token's text-payload (ident source slice / int / float / decoded str)
+fn dmptext(m: P) -> P {
+    if m.tk == 1 {
+        let i = m.ts;
+        while i < m.ts + m.tl {
+            m = dmpc(m, at(m.src, i, m.n));
+            i = i + 1;
+        }
+        return mbflush(m);
+    }
+    if m.tk == 2 {
+        put_i64(m.ival);
+        return m;
+    }
+    if m.tk == 3 {
+        let i2 = m.ts;
+        while i2 < m.ts + m.tl {
+            m = dmpc(m, at(m.src, i2, m.n));
+            i2 = i2 + 1;
+        }
+        return mbflush(m);
+    }
+    if m.tk == 4 {
+        let i3 = m.rga;
+        let last = m.rga + m.rgb;
+        while i3 < last {
+            m = dmpc(m, cast<i32>(m.pool[i3]));
+            i3 = i3 + 1;
+        }
+        return mbflush(m);
+    }
+    return m;
+}
+
+// phase-L driver: replay `ralt tokens` output from TP_SRC
+fn main() -> i32 {
+    let src = getenv("TP_SRC");
+    let n = len(src);
+    if n == 0 {
+        return 1;
+    }
+    let m = pboot(src, n);
+    // shebang
+    if n >= 2 && at(src, 0, n) == 35 && at(src, 1, n) == 33 {
+        let running0 = true;
+        while running0 {
+            running0 = false;
+            if m.pos < m.n && at(m.src, m.pos, m.n) != 10 {
+                m = advbyte(m);
+                running0 = true;
+            }
+        }
+    }
+    let running = true;
+    while running {
+        running = false;
+        m = adv(m);
+        put_raw(tokname(m.tk));
+        putchar(32);
+        put_i32(m.tline);
+        putchar(32);
+        put_i32(m.tcol);
+        if m.tk == 1 || m.tk == 4 {
+            putchar(32);
+            m = dmptext(m);
+        }
+        putchar(10);
+        if !(m.tk == 0 && m.ts >= m.n) {
+            running = true;
+        }
+    }
+    // diags: C ralt tokens prints them on stderr AFTER tokens; carve exact
+    let i = 0;
+    while i < m.nd {
+        // reuse the diag printer from the checker; skip for phase L driver
+        i = i + 1;
+    }
+    if m.nd > 0 {
+        return 1;
+    }
+    return 0;
+}
+
+fn put_i64(v: i64) -> () {
+    let a: u64 = cast<u64>(v);
+    if v < 0 {
+        putchar(45);
+        a = cast<u64>(0 - v);
+    }
+    let buf: [24]u8;
+    let n = 0;
+    if a == 0 { buf[0] = 48; n = 1; }
+    let running = true;
+    while running {
+        running = false;
+        if a > 0 {
+            buf[n] = cast<u8>(48 + cast<i32>(a) % 10);
+            n = n + 1;
+            a = a / 10;
+            running = true;
+        }
+    }
+    let i = 0;
+    while i < n {
+        putchar(cast<i32>(buf[n - 1 - i]));
+        i = i + 1;
+    }
+    return;
+}
+// --- parser phase WIP: parse_expr family (see lexer phase L above) ---

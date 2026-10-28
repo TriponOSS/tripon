@@ -502,9 +502,18 @@ static void emit_expr(Cg *g, Expr *e) {
     }
     case EX_UN:
         if (e->unop == UN_NOT) {
-            fputs("(!", g->out);
-            emit_expr(g, e->operand);
-            fputs(")", g->out);
+            /* C precedence: `!` must own its operand; a bare operand like a
+             * relational chain would otherwise bind wrongly */
+            if (e->operand->kind == EX_BIN) {
+                fputs("!", g->out);
+                fputc('(', g->out);
+                emit_expr(g, e->operand);
+                fputc(')', g->out);
+            } else {
+                fputs("!(", g->out);
+                emit_expr(g, e->operand);
+                fputc(')', g->out);
+            }
         } else {
             fputs("-", g->out);
             emit_expr(g, e->operand);
