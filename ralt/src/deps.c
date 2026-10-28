@@ -355,8 +355,10 @@ static void strlist_push(StrList *l, const char *s) {
     l->len++;
 }
 
-static int name_in(const char *name, const char *a, const char *b, const char *c) {
-    return strcmp(name, a) == 0 || strcmp(name, b) == 0 || strcmp(name, c) == 0;
+static int name_in(const char *name, const char *a, const char *b, const char *c,
+                   const char *d) {
+    return strcmp(name, a) == 0 || strcmp(name, b) == 0 ||
+           strcmp(name, c) == 0 || (d && strcmp(name, d) == 0);
 }
 
 static void walk_collect(const char *dir, StrList *out) {
@@ -374,7 +376,9 @@ static void walk_collect(const char *dir, StrList *out) {
         snprintf(sub, sizeof sub, "%s/%s", dir, ent->d_name);
         if (stat(sub, &st) != 0) continue;
         if (S_ISDIR(st.st_mode)) {
-            if (name_in(ent->d_name, "tests", "examples", "bench")) continue;
+            /* selfhost sources are self-contained units: never folded into
+             * foreign dep translation units, they carry their own mains */
+            if (name_in(ent->d_name, "tests", "examples", "bench", "selfhost")) continue;
             walk_collect(sub, out);
         } else if (S_ISREG(st.st_mode)) {
             size_t n = strlen(ent->d_name);

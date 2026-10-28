@@ -289,6 +289,23 @@ int main(int argc, char **argv) {
         return g_nerrors > 0 ? 1 : 0;
     }
 
+    if (strcmp(cmd, "tree") == 0) {
+        /* P3.1 oracle: post-parse AST, prefix + indentation, frozen format */
+        size_t len;
+        char *src = read_all(file, &len);
+        if (!src) {
+            fprintf(stderr, "ralt: cannot read %s\n", file);
+            return 1;
+        }
+        int ntoks2;
+        Token *toks2 = lex_file(a, src, len, file, &ntoks2);
+        Decl **decls2 = parse_file(a, toks2, ntoks2, file);
+        int n = 0;
+        while (decls2 && decls2[n]) n++;
+        parse_tree_dump(stdout, decls2, n);
+        return g_nerrors > 0 ? 1 : 0;
+    }
+
     if (strcmp(cmd, "build") == 0 || strcmp(cmd, "run") == 0) {
         int ndecls;
         Decl **decls = analyze_proj(a, file, &ndecls);
