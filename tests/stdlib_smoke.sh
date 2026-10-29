@@ -19,7 +19,7 @@ for src in tests/cases_std/*.tp; do
     work="$OUT/stdlibwork/$name"
     mkdir -p "$work"
     cp "$src" "$work/main.tp"
-    printf 'name: %s\nversion: 0.1.0\ndeps:\n  std: %s/stdlib\n' "$name" "$PWD" > "$work/ralt.yaml"
+    printf 'name: %s\nversion: 0.1.0\ndeps:\n  std: %s/src/stdlib\n' "$name" "$PWD" > "$work/ralt.yaml"
     if ! (cd "$work" && "$OLDPWD/$RALT" run main.tp > "$OLDPWD/$OUT/$name.stdout" 2>"$OLDPWD/$OUT/$name.log"); then
         OLDPWD="$PWD"
         note "FAIL std/$name: ralt run failed"

@@ -5,11 +5,6 @@
 // Lexes its own source when fed TP_SRC="$(cat selfhost/lexer.tp)".
 use tier core;
 
-extern "C" {
-    fn getenv(name: str) -> *i8;
-    fn putchar(c: i32) -> i32;
-}
-
 // ---------------- byte helpers ----------------
 
 // byte at index i, 0 when out of range (EOF sentinel mirrors C peek())

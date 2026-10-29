@@ -11,11 +11,6 @@
 // non-main fns in declaration order. No imports: fully self-contained.
 use tier core;
 
-extern "C" {
-    fn getenv(name: str) -> *i8;
-    fn putchar(c: i32) -> i32;
-}
-
 // ---------------- token kinds (mirror common.h values exactly) ----------------
 // 0 EOF 1 ident 2 int 3 float 4 str
 // 5 fn 6 let 7 const 8 return 9 if 10 else 11 while 12 match 13 struct

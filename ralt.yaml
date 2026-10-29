@@ -1,4 +1,4 @@
 name: tripon
 version: 0.1.0
 deps:
-  std: ./stdlib
+  std: ./src/stdlib

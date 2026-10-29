@@ -5,7 +5,7 @@ Tier-managed standard library for Tripon, in pure `.tp` — no FFI, no C.
 Layout:
 
 ```
-stdlib/
+src/stdlib/
   kernel/math.tp      integer math helpers (tier kernel, no alloc)
   kernel/bits.tp      byte packing, popcount, parity
   core/optutil.tp     opt<i32> helpers: is_some/is_none/unwrap_or/map_or
@@ -20,13 +20,13 @@ stdlib/
   core/strcmp.tp      byte search, lexicographic compare, case-insensitive eq
 ```
 
-Consumption: `stdlib/` is a plain local dep — point any `ralt.yaml` at it:
+Consumption: `src/stdlib/` is a plain local dep — point any `ralt.yaml` at it:
 
 ```yaml
 name: myapp
 version: 0.1.0
 deps:
-  std: ./path/to/stdlib
+  std: ./src/stdlib
 ```
 
 Dep folding merges the stdlib sources into the same translation unit, so

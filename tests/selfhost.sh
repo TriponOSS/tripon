@@ -8,11 +8,11 @@ set -e
 cd "$(dirname "$0")/.."
 RALT="${RALT:-./build/ralt}"
 OUT="${OUT:-/tmp}"
-"$RALT" build selfhost/lexer.tp -o "$OUT/tp_lexbin"
-"$RALT" build selfhost/parser.tp -o "$OUT/tp_parbin"
+"$RALT" build src/selfhost/lexer.tp -o "$OUT/tp_lexbin"
+"$RALT" build src/selfhost/parser.tp -o "$OUT/tp_parbin"
 n=0
 fail=0
-for f in tests/cases/*.tp selfhost/lexer.tp; do
+for f in tests/cases/*.tp src/selfhost/lexer.tp; do
     n=$((n + 1))
     TP_SRC="$(cat "$f"; echo x)"
     TP_SRC="${TP_SRC%x}"
@@ -33,7 +33,7 @@ echo "ok   selfhost lexer ($n files)"
 
 n=0
 fail=0
-for f in tests/cases/*.tp selfhost/lexer.tp selfhost/parser.tp; do
+for f in tests/cases/*.tp src/selfhost/lexer.tp src/selfhost/parser.tp; do
     n=$((n + 1))
     TP_SRC="$(cat "$f"; echo x)"
     TP_SRC="${TP_SRC%x}"
