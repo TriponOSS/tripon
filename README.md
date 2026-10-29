@@ -337,8 +337,10 @@ prove them.
       equality and the `ucomis` mnemonic fixed, so float cases are at parity
       too. Structs landed: field layout, construction, nested field access and
       assignment, by-value copy, plus an internal struct-param/return ABI
-      (pointer-passed params, hidden return pointer) — 17 parity, 4 aggregate
-      skips. Next: arrays-of-structs, enums/match, opt/result
+      (pointer-passed params, hidden return pointer). Enums, `match`, `opt`/
+      `result` and `?` propagation landed, as did arrays of structs (element
+      stride + aggregate element load/store). P4.3 is complete: all 21 corpus
+      cases are at parity with the C backend, incl. E9002 bounds traps
 - [x] **Tier linter.** `ralt lint` parses and flags features above the
       declared `use tier` ceiling (E0301); kernel files using str/opt/result/
       match/? are caught. `tests/lint_smoke.sh`
