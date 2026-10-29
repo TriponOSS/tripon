@@ -1,0 +1,19 @@
+// enums with payloads + exhaustive match, pure Tripon.
+use tier core;
+
+enum Shape { Circle(f64), Rect(f64, f64), Dot }
+
+fn area(s: Shape) -> f64 {
+    match s {
+        Shape::Circle(r) => { return 3.14 * r * r; }
+        Shape::Rect(w, h) => { return w * h; }
+        Shape::Dot => { return 0.0; }
+    }
+}
+
+fn main() -> i32 {
+    print_f64(area(Shape::Circle(2.0)));
+    print_f64(area(Shape::Rect(3.0, 4.0)));
+    print_f64(area(Shape::Dot));
+    return 0;
+}

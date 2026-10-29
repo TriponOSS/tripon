@@ -133,14 +133,16 @@ else
     fail=$((fail + 1)); failed_names="$failed_names tool/deps"
 fi
 
-# stdlib: Tripon-only smoke (kernel math, core opt/result/str) via dep folding
+# stdlib: Tripon-only smoke (kernel math, core opt/result/str, algorithms,
+# enums, result chains, struct accumulators) via dep folding
 if sh tests/stdlib_smoke.sh > "$OUT/stdlib.log" 2>&1; then
-    note "ok   stdlib (kernel + core smoke)"
-    pass=$((pass + 3))
+    nstd=$(grep -c '^  ok' "$OUT/stdlib.log")
+    note "ok   stdlib ($nstd cases)"
+    pass=$((pass + nstd))
 else
     note "FAIL stdlib"
     cat "$OUT/stdlib.log"
-    fail=$((fail + 3)); failed_names="$failed_names stdlib"
+    fail=$((fail + 1)); failed_names="$failed_names stdlib"
 fi
 
 # selfhost: Tripon lexer port must replay the bootstrap C lexer token-for-token

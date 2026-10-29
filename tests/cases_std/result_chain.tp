@@ -1,0 +1,30 @@
+// result chaining with ? propagation inside same-shape fns.
+use tier core;
+
+fn parse(s: str) -> result<i32, str> {
+    if s == "" { return err("empty"); }
+    return ok(42);
+}
+
+fn run() -> result<i32, str> {
+    let n = parse("hi")?;
+    return ok(n * 2);
+}
+
+fn run_bad() -> result<i32, str> {
+    let n = parse("")?;
+    return ok(n);
+}
+
+fn show(r: result<i32, str>) -> i32 {
+    match r {
+        ok(v) => { print_i32(v); return v; }
+        err(e) => { print_str(e); return 0 - 1; }
+    }
+}
+
+fn main() -> i32 {
+    print_i32(show(run()));
+    print_i32(show(run_bad()));
+    return 0;
+}

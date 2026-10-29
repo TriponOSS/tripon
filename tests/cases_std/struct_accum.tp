@@ -1,0 +1,26 @@
+// struct accumulator: by-value update + mean with div-zero guard.
+use tier core;
+
+struct Acc { total: i32; count: i32; }
+
+fn acc_add(a: Acc, x: i32) -> Acc {
+    return Acc { total: a.total + x, count: a.count + 1 };
+}
+
+fn acc_mean(a: Acc) -> i32 {
+    if a.count == 0 { return 0; }
+    return a.total / a.count;
+}
+
+fn main() -> i32 {
+    let a = Acc { total: 0, count: 0 };
+    a = acc_add(a, 10);
+    a = acc_add(a, 20);
+    a = acc_add(a, 30);
+    print_i32(a.total);
+    print_i32(a.count);
+    print_i32(acc_mean(a));
+    let empty = Acc { total: 0, count: 0 };
+    print_i32(acc_mean(empty));
+    return 0;
+}
