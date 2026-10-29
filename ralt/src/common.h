@@ -143,6 +143,7 @@ typedef enum {
     TY_OPT, TY_RESULT,      /* opt<T> / result<T,E>; tname = anon enum name */
     TY_ARRAY,               /* fixed array; tname = canonical "[N]T" name */
     TY_PTR8,                /* raw *i8 -> char *, extern "C" islands only */
+    TY_FN,                  /* function pointer type; tname = canonical "fn(...)->T" */
 } Ty;
 
 const char *ty_name(Ty t);
@@ -165,6 +166,20 @@ ArrayInfo *array_declare(const char *name, int len, Ty elem, const char *elem_tn
 ArrayInfo *array_find(const char *name);
 int array_count(void);
 ArrayInfo *array_at(int i);
+
+/* function-pointer types: canonical name -> signature */
+typedef struct {
+    const char *name;
+    Ty ret;
+    const char *ret_tname;
+    Ty params[8];
+    int nparams;
+    Span span;
+} FnTypeInfo;
+FnTypeInfo *fn_type_declare(const char *name, Ty ret, const char *ret_tname, Ty *params, int nparams, Span sp);
+FnTypeInfo *fn_type_find(const char *name);
+int fn_type_count(void);
+FnTypeInfo *fn_type_at(int i);
 
 /* ---------------- AST ---------------- */
 

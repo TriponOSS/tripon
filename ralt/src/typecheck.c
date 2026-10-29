@@ -112,24 +112,25 @@ done: ;
 typedef struct {
     const char *name;
     Ty ret;
-    Ty arg;
+    int argc;
+    Ty args[4];
 } Builtin;
 
 static const Builtin BUILTINS[] = {
     /* Tripon stdlib prelude v0, tier core, always available, no import */
-    {"print_i32", TY_VOID, TY_I32},
-    {"print_i64", TY_VOID, TY_I64},
-    {"print_f64", TY_VOID, TY_F64},
-    {"print_str", TY_VOID, TY_STR},
-    {"len",       TY_I32, TY_STR},
+    {"print_i32", TY_VOID, 1, {TY_I32, TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"print_i64", TY_VOID, 1, {TY_I64, TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"print_f64", TY_VOID, 1, {TY_F64, TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"print_str", TY_VOID, 1, {TY_STR, TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"len",       TY_I32, 1, {TY_STR, TY_UNSET, TY_UNSET, TY_UNSET}},
 };
 
-static bool builtin_info(const char *name, int *ret, int *argc, Ty *argty) {
+static bool builtin_info(const char *name, int *ret, int *argc, Ty *args) {
     for (size_t i = 0; i < sizeof BUILTINS / sizeof BUILTINS[0]; i++) {
         if (strcmp(BUILTINS[i].name, name) == 0) {
             *ret = BUILTINS[i].ret;
-            *argc = 1;
-            *argty = BUILTINS[i].arg;
+            *argc = BUILTINS[i].argc;
+            for (int k = 0; k < BUILTINS[i].argc && k < 4; k++) args[k] = BUILTINS[i].args[k];
             return true;
         }
     }
@@ -332,7 +333,7 @@ static const char *ty_disp(Ty t, const char *tnm) {
 static bool ty_same(Ty a, const char *an, Ty b, const char *bn) {
     if (a != b) return false;
     if (a == TY_STRUCT || a == TY_ENUM || a == TY_TYPEDEF ||
-        a == TY_OPT || a == TY_RESULT || a == TY_ARRAY)
+        a == TY_OPT || a == TY_RESULT || a == TY_ARRAY || a == TY_FN)
         return an && bn && strcmp(an, bn) == 0;
     return true;
 }
@@ -534,6 +535,40 @@ static Ty tc_expr(Ctx *c, Expr *e) {
         /* bare `none`: the no-payload opt constructor (payload ctors need()) */
         if (strcmp(e->sval, "none") == 0 && !find_fn(c, "none"))
             return tc_ctor(c, e, "none");
+        /* a bare function name is a function-pointer value */
+        {
+            FnDecl *fn = find_fn(c, e->sval);
+            if (fn) {
+                /* build canonical signature */
+                char buf[256]; size_t bi = 0;
+                bi += (size_t)snprintf(buf + bi, sizeof buf - bi, "fn(");
+                for (int i = 0; i < fn->nparams; i++) {
+                    if (i) bi += (size_t)snprintf(buf + bi, sizeof buf - bi, ",");
+                    const char *nm = fn->params[i].tname;
+                    bi += (size_t)snprintf(buf + bi, sizeof buf - bi, "%s",
+                        nm ? nm : ty_name(fn->params[i].ty));
+                }
+                bi += (size_t)snprintf(buf + bi, sizeof buf - bi, ")");
+                if (fn->ret != TY_VOID) {
+                    const char *rn = fn->retname;
+                    bi += (size_t)snprintf(buf + bi, sizeof buf - bi, "->%s",
+                        rn ? rn : ty_name(fn->ret));
+                }
+                const char *cname = arena_dupstr(c->a, buf, strlen(buf));
+                (void)fn_type_declare(cname, fn->ret, fn->retname, NULL, 0, e->span);
+                /* fix params in fn type: re-declare with params */
+                FnTypeInfo *fi = fn_type_find(cname);
+                if (fi) {
+                    fi->nparams = fn->nparams;
+                    for (int i = 0; i < fn->nparams && i < 8; i++) fi->params[i] = fn->params[i].ty;
+                    fi->ret = fn->ret;
+                    fi->ret_tname = fn->retname;
+                }
+                e->ty = TY_FN;
+                e->tname = cname;
+                return TY_FN;
+            }
+        }
         /* reported once at parse; no value, no cascade */
         if (strcmp(e->sval, "null") == 0) { e->ty = TY_UNSET; return TY_UNSET; }
         char msg[200];
@@ -569,23 +604,27 @@ static Ty tc_expr(Ctx *c, Expr *e) {
             e->ty = TY_I32;
             return e->ty;
         }
-        int bret, bargc; Ty barg;
-        if (builtin_info(e->callee, &bret, &bargc, &barg)) {
+        int bret, bargc; Ty barg[4];
+        memset(barg, 0, sizeof barg);
+        if (builtin_info(e->callee, &bret, &bargc, barg)) {
             if (e->nargs != bargc) {
                 char msg[200];
                 snprintf(msg, sizeof msg, "builtin '%s' takes %d argument(s), got %d",
                          e->callee, bargc, e->nargs);
                 diag(e->span, E0202, SEV_ERROR, msg, "match the signature exactly");
             } else {
-                Ty at = tc_expr_w(c, e->args[0], barg, NULL);
-                /* no cascades: a deeper-reported arg stops here */
-                if (at != TY_UNSET && !ty_same(at, e->args[0]->tname, barg, NULL) &&
-                !ty_fence_ok(at, barg)) {
-                    char msg[240];
-                    snprintf(msg, sizeof msg, "builtin '%s' expects %s, got %s",
-                             e->callee, ty_name(barg), ty_disp(at, e->args[0]->tname));
-                    diag(e->args[0]->span, E0202, SEV_ERROR, msg,
-                         "no implicit conversion exists in Tripon");
+                for (int i = 0; i < bargc; i++) {
+                    Ty at = tc_expr_w(c, e->args[i], barg[i], NULL);
+                    if (at == TY_UNSET || barg[i] == TY_UNSET) continue;
+                    if (!ty_same(at, e->args[i]->tname, barg[i], NULL) &&
+                        !ty_fence_ok(at, barg[i])) {
+                        char msg[240];
+                        snprintf(msg, sizeof msg, "argument %d of '%s' must be %s, got %s",
+                                 i + 1, e->callee,
+                                 ty_name(barg[i]), ty_disp(at, e->args[i]->tname));
+                        diag(e->args[i]->span, E0202, SEV_ERROR, msg,
+                             "no implicit conversion exists in Tripon");
+                    }
                 }
             }
             e->ty = (Ty)bret;

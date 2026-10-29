@@ -59,7 +59,27 @@ static const char *cg_fnname(Cg *g, FnDecl *fn) {
 }
 
 /* C name for a Tripon type: composites map to their tp_-prefixed typedef */
+static const char *sanitize_fn_name(const char *s) {
+    static char buf[256];
+    size_t j = 0;
+    for (size_t i = 0; s && s[i] && j < sizeof buf - 1; i++) {
+        char c = s[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+            buf[j++] = c;
+        else buf[j++] = '_';
+    }
+    buf[j] = 0;
+    return buf;
+}
+
 static const char *tp_type_name(Cg *g, Ty t, const char *tname) {
+    if (t == TY_FN) {
+        char buf[280];
+        snprintf(buf, sizeof buf, "tp_fn_%s", sanitize_fn_name(tname));
+        char *out = arena_alloc(g->a, strlen(buf) + 1);
+        strcpy(out, buf);
+        return out;
+    }
     if (t == TY_STRUCT || t == TY_ENUM || t == TY_TYPEDEF ||
         t == TY_OPT || t == TY_RESULT) {
         size_t n = strlen(tname ? tname : "TpType");
@@ -473,9 +493,18 @@ static void emit_expr(Cg *g, Expr *e) {
     case EX_BOOL:
         fputs(e->bval ? "true" : "false", g->out);
         break;
-    case EX_IDENT:
-        fputs(cg_ident(g, e->sval), g->out);
+    case EX_IDENT: {
+        /* a bare function name denotes its compiled entry point */
+        FnDecl *fn = NULL;
+        for (int i = 0; i < g->nfuncs; i++)
+            if (strcmp(g->funcs[i]->name, e->sval) == 0) { fn = g->funcs[i]; break; }
+        if (fn && e->ty == TY_FN) {
+            fputs(fn->is_extern ? fn->name : cg_fnname(g, fn), g->out);
+        } else {
+            fputs(cg_ident(g, e->sval), g->out);
+        }
         break;
+    }
     case EX_CALL: {
         if (strcmp(e->callee, "len") == 0 && e->nargs == 1 &&
             e->args[0]->ty == TY_ARRAY) {
@@ -484,7 +513,10 @@ static void emit_expr(Cg *g, Expr *e) {
         }
         if (is_builtin(e->callee)) {
             fprintf(g->out, "tp_builtin_%s(", e->callee);
-            emit_expr(g, e->args[0]);
+            for (int i = 0; i < e->nargs; i++) {
+                if (i) fputs(", ", g->out);
+                emit_expr(g, e->args[i]);
+            }
             fputs(")", g->out);
             break;
         }
@@ -903,6 +935,24 @@ void codegen_file(Arena *a, Decl **decls, int ndecls, const char *outpath, bool 
 
     emit_prologue(&g);
     emit_typedefs(&g);
+    fputs("\n/* ---- function-pointer types ---- */\n", out);
+    for (int i = 0; i < fn_type_count(); i++) {
+        FnTypeInfo *fi = fn_type_at(i);
+        if (!fi) continue;
+        /* return type name */
+        const char *retc = ty_cname(fi->ret);
+        if (fi->ret == TY_STRUCT || fi->ret == TY_ENUM || fi->ret == TY_TYPEDEF ||
+            fi->ret == TY_OPT || fi->ret == TY_RESULT || fi->ret == TY_FN)
+            retc = tp_type_name(&g, fi->ret, fi->ret_tname);
+        fprintf(g.out, "typedef %s (*%s)(", retc, tp_type_name(&g, TY_FN, fi->name));
+        for (int j = 0; j < fi->nparams; j++) {
+            if (j) fputs(", ", g.out);
+            const char *pc = ty_cname(fi->params[j]);
+            /* params may be composites; resolve via registry? For now scalars */
+            fputs(pc, g.out);
+        }
+        fputs(");\n", g.out);
+    }
     fputs("\n/* ---- extern blocks ---- */\n", out);
     for (int i = 0; i < ndecls; i++)
         if (decls[i]->kind == D_FN && decls[i]->fn->is_extern) emit_fn(&g, decls[i]->fn);

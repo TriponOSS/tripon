@@ -85,23 +85,42 @@ static Ty parse_type(Parser *p, const char **tname) {
     if (eat(p, TK_LP) && eat(p, TK_RP)) {
         return TY_VOID;     /* "()" = unit/void */
     }
-    /* fn types are not a v0 feature (closures land with the std tier). Reject
-     * them cleanly instead of crashing on a NULL token text. */
     if (at(p, TK_FN)) {
         Token *fk = advance(p);
-        if (at(p, TK_LP)) {
-            int depth = 0;
-            while (!at(p, TK_EOF)) {
-                if (at(p, TK_LP)) { depth++; advance(p); }
-                else if (at(p, TK_RP)) { advance(p); if (--depth <= 0) break; }
-                else advance(p);
+        bool saved_ptr = p->allow_ptr;
+        p->allow_ptr = true;
+        expect_token(p, TK_LP, "'(' after fn");
+        Ty params[8]; int nparams = 0;
+        if (!at(p, TK_RP)) {
+            while (1) {
+                const char *pn = NULL;
+                Ty pt = parse_type(p, &pn);
+                if (nparams < 8) params[nparams++] = pt;
+                if (!eat(p, TK_COMMA)) break;
             }
         }
-        if (at(p, TK_ARROW)) { advance(p); (void)parse_type(p, NULL); }
-        diag(fk->span, E0101, SEV_ERROR,
-             "function types are not available in v0 (closures arrive with the std tier)",
-             "pass functions by name to extern APIs, or raise the tier target");
-        return TY_UNSET;
+        expect_token(p, TK_RP, "')' to close fn params");
+        Ty ret = TY_VOID;
+        const char *rtn = NULL;
+        if (eat(p, TK_ARROW)) { ret = parse_type(p, &rtn); }
+        /* canonical name */
+        char buf[256]; size_t bi = 0;
+        bi += (size_t)snprintf(buf + bi, sizeof buf - bi, "fn(");
+        for (int i = 0; i < nparams; i++) {
+            if (i) bi += (size_t)snprintf(buf + bi, sizeof buf - bi, ",");
+            const char *nm = (i < nparams) ? NULL : NULL;
+            (void)nm;
+            bi += (size_t)snprintf(buf + bi, sizeof buf - bi, "%s", ty_name(params[i]));
+        }
+        bi += (size_t)snprintf(buf + bi, sizeof buf - bi, ")");
+        if (ret != TY_VOID) {
+            bi += (size_t)snprintf(buf + bi, sizeof buf - bi, "->%s", ty_name(ret));
+        }
+        const char *cname = arena_dupstr(p->a, buf, strlen(buf));
+        fn_type_declare(cname, ret, rtn, params, nparams, fk->span);
+        if (tname) *tname = cname;
+        p->allow_ptr = saved_ptr;
+        return TY_FN;
     }
     Token *t = expect_token(p, TK_IDENT, "a type name");
     static const struct { const char *n; Ty ty; } TYPES[] = {

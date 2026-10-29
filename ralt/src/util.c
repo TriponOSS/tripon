@@ -54,14 +54,14 @@ void vec_push_ptr(VecPtr *v, void *p) {
 static const char *TY_NAMES[] = {
     "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
     "isize", "usize", "f32", "f64", "bool", "str", "()",
-    "struct", "enum", "typedef", "?", "opt", "result", "array", "*i8",
+    "struct", "enum", "typedef", "?", "opt", "result", "array", "*i8", "fn",
 };
 static const char *TY_CNAMES[] = {
     "int8_t", "int16_t", "int32_t", "int64_t",
     "uint8_t", "uint16_t", "uint32_t", "uint64_t",
     "intptr_t", "uintptr_t", "float", "double", "bool", "const char *", "void",
     "?struct", "?enum", "?typedef", "int32_t", "?opt", "?result", "?array",
-    "char *",
+    "char *", "void *",
 };
 const char *ty_name(Ty t) { return TY_NAMES[t]; }
 const char *ty_cname(Ty t) { return TY_CNAMES[t]; }
@@ -101,6 +101,38 @@ ArrayInfo *array_declare(const char *name, int len, Ty elem, const char *elem_tn
     ai->span = sp;
     return ai;
 }
+
+#define FN_TYPE_MAX 64
+static FnTypeInfo g_fntypes[FN_TYPE_MAX];
+static int g_n_fntypes = 0;
+
+FnTypeInfo *fn_type_declare(const char *name, Ty ret, const char *ret_tname, Ty *params, int nparams, Span sp) {
+    FnTypeInfo *ex = fn_type_find(name);
+    if (ex) return ex;
+    if (g_n_fntypes == FN_TYPE_MAX) {
+        diag(sp, E0202, SEV_ERROR, "too many distinct function types", "reuse shapes");
+        return NULL;
+    }
+    FnTypeInfo *fi = &g_fntypes[g_n_fntypes++];
+    fi->name = name;
+    fi->ret = ret;
+    fi->ret_tname = ret_tname;
+    fi->nparams = nparams;
+    if (nparams > 8) nparams = 8;
+    for (int k = 0; k < nparams; k++) fi->params[k] = params[k];
+    fi->span = sp;
+    return fi;
+}
+
+FnTypeInfo *fn_type_find(const char *name) {
+    if (!name) return NULL;
+    for (int i = 0; i < g_n_fntypes; i++)
+        if (strcmp(g_fntypes[i].name, name) == 0) return &g_fntypes[i];
+    return NULL;
+}
+
+int fn_type_count(void) { return g_n_fntypes; }
+FnTypeInfo *fn_type_at(int i) { return (i >= 0 && i < g_n_fntypes) ? &g_fntypes[i] : NULL; }
 
 bool ty_is_bool(Ty t) { return t == TY_BOOL; }
 
