@@ -1,0 +1,46 @@
+// stdlib/kernel/bits.tp - bit-level integer helpers (tier kernel).
+// No shifts in v0 grammar, so these use multiply/divide by powers of two.
+
+use tier core;
+
+fn is_even(x: i32) -> bool {
+    return x % 2 == 0;
+}
+
+fn is_odd(x: i32) -> bool {
+    return x % 2 != 0;
+}
+
+fn low_byte(x: i32) -> i32 {
+    return x % 256;
+}
+
+fn high_byte(x: i32) -> i32 {
+    return (x / 256) % 256;
+}
+
+fn pack16(hi: i32, lo: i32) -> i32 {
+    return (hi % 256) * 256 + (lo % 256);
+}
+
+fn unpack16_hi(x: i32) -> i32 {
+    return (x / 256) % 256;
+}
+
+fn unpack16_lo(x: i32) -> i32 {
+    return x % 256;
+}
+
+fn popcount_u8(x0: i32) -> i32 {
+    let x = x0 % 256;
+    let n = 0;
+    while x > 0 {
+        n += x % 2;
+        x = x / 2;
+    }
+    return n;
+}
+
+fn parity_u8(x: i32) -> bool {
+    return popcount_u8(x) % 2 == 1;
+}

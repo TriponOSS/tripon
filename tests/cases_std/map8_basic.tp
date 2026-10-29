@@ -1,0 +1,23 @@
+// map8 stdlib smoke: fixed-capacity i32->i32 map.
+use tier core;
+
+fn main() -> i32 {
+    let m = map8_init();
+    print_i32(map8_len(m));
+    if map8_is_full(m) { print_str("bad"); } else { print_str("room yes"); }
+    m = map8_put(m, 1, 100);
+    m = map8_put(m, 2, 200);
+    m = map8_put(m, 1, 111);
+    print_i32(map8_len(m));
+    print_i32(unwrap_or_i32(map8_get(m, 1), 0 - 1));
+    print_i32(unwrap_or_i32(map8_get(m, 2), 0 - 1));
+    print_i32(unwrap_or_i32(map8_get(m, 9), 0 - 1));
+    if map8_has(m, 2) { print_str("has yes"); }
+    if map8_has(m, 9) { print_str("bad"); } else { print_str("missing ok"); }
+    print_i32(map8_sum_keys(m));
+    print_i32(map8_sum_values(m));
+    m = map8_del(m, 2);
+    print_i32(map8_len(m));
+    if map8_has(m, 2) { print_str("bad"); } else { print_str("deleted ok"); }
+    return 0;
+}

@@ -1,0 +1,16 @@
+// bits stdlib smoke: byte packing, popcount, parity.
+use tier core;
+
+fn main() -> i32 {
+    if is_even(4) { print_str("even yes"); }
+    if is_odd(7) { print_str("odd yes"); }
+    print_i32(low_byte(300));
+    print_i32(high_byte(300));
+    print_i32(pack16(1, 2));
+    print_i32(unpack16_hi(258));
+    print_i32(unpack16_lo(258));
+    print_i32(popcount_u8(255));
+    print_i32(popcount_u8(128));
+    if parity_u8(7) { print_str("odd parity"); } else { print_str("even parity"); }
+    return 0;
+}

@@ -1,0 +1,64 @@
+// stdlib/core/queue8.tp - fixed-capacity FIFO + LIFO, tier core.
+// Struct-wrapped fixed arrays (arrays are function-local in v0).
+
+use tier core;
+
+struct Ring8 { a: [8]i32; head: i32; tail: i32; n: i32; }
+
+fn ring8_init() -> Ring8 {
+    let r: Ring8;
+    let i = 0;
+    while i < 8 {
+        r.a[i] = 0;
+        i += 1;
+    }
+    r.head = 0;
+    r.tail = 0;
+    r.n = 0;
+    return r;
+}
+
+fn ring8_len(r: Ring8) -> i32 {
+    return r.n;
+}
+
+fn ring8_is_empty(r: Ring8) -> bool {
+    return r.n == 0;
+}
+
+fn ring8_is_full(r: Ring8) -> bool {
+    return r.n >= 8;
+}
+
+fn ring8_push(r0: Ring8, x: i32) -> Ring8 {
+    let r = r0;
+    if r.n >= 8 { return r; }
+    r.a[r.tail] = x;
+    r.tail = (r.tail + 1) % 8;
+    r.n += 1;
+    return r;
+}
+
+// returns value via opt; caller updates the ring with the popped state
+fn ring8_front(r: Ring8) -> opt<i32> {
+    if r.n == 0 { return none; }
+    return some(r.a[r.head]);
+}
+
+fn ring8_pop(r0: Ring8) -> Ring8 {
+    let r = r0;
+    if r.n == 0 { return r; }
+    r.head = (r.head + 1) % 8;
+    r.n -= 1;
+    return r;
+}
+
+fn ring8_sum(r: Ring8) -> i32 {
+    let s = 0;
+    let i = 0;
+    while i < r.n {
+        s += r.a[(r.head + i) % 8];
+        i += 1;
+    }
+    return s;
+}

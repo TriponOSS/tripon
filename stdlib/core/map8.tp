@@ -1,0 +1,109 @@
+// stdlib/core/map8.tp - fixed-capacity i32->i32 map, tier core.
+// Linear-probe over a fixed slot table inside a struct (arrays are
+// function-local in v0, so the table rides along by value).
+
+use tier core;
+
+struct MapSlot { k: i32; v: i32; used: bool; }
+struct Map8 { s: [8]MapSlot; n: i32; }
+
+fn map8_init() -> Map8 {
+    let m: Map8;
+    let i = 0;
+    while i < 8 {
+        m.s[i].k = 0;
+        m.s[i].v = 0;
+        m.s[i].used = false;
+        i += 1;
+    }
+    m.n = 0;
+    return m;
+}
+
+fn map8_len(m: Map8) -> i32 {
+    return m.n;
+}
+
+fn map8_cap(m: Map8) -> i32 {
+    return 8;
+}
+
+fn map8_is_full(m: Map8) -> bool {
+    return m.n >= 8;
+}
+
+fn map8_get(m: Map8, k: i32) -> opt<i32> {
+    let i = 0;
+    while i < 8 {
+        if m.s[i].used && m.s[i].k == k { return some(m.s[i].v); }
+        i += 1;
+    }
+    return none;
+}
+
+fn map8_has(m: Map8, k: i32) -> bool {
+    match map8_get(m, k) {
+        some(v) => { return true; }
+        none => { return false; }
+    }
+}
+
+fn map8_put(m0: Map8, k: i32, v: i32) -> Map8 {
+    let m = m0;
+    let i = 0;
+    while i < 8 {
+        if m.s[i].used && m.s[i].k == k {
+            m.s[i].v = v;
+            return m;
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < 8 {
+        if !m.s[i].used {
+            m.s[i].k = k;
+            m.s[i].v = v;
+            m.s[i].used = true;
+            m.n += 1;
+            return m;
+        }
+        i += 1;
+    }
+    return m;
+}
+
+fn map8_del(m0: Map8, k: i32) -> Map8 {
+    let m = m0;
+    let i = 0;
+    while i < 8 {
+        if m.s[i].used && m.s[i].k == k {
+            m.s[i].used = false;
+            m.s[i].k = 0;
+            m.s[i].v = 0;
+            m.n -= 1;
+            return m;
+        }
+        i += 1;
+    }
+    return m;
+}
+
+fn map8_sum_values(m: Map8) -> i32 {
+    let s = 0;
+    let i = 0;
+    while i < 8 {
+        if m.s[i].used { s += m.s[i].v; }
+        i += 1;
+    }
+    return s;
+}
+
+fn map8_sum_keys(m: Map8) -> i32 {
+    let s = 0;
+    let i = 0;
+    while i < 8 {
+        if m.s[i].used { s += m.s[i].k; }
+        i += 1;
+    }
+    return s;
+}
