@@ -1,0 +1,11 @@
+// stdlib smoke: core string helpers via ralt.yaml dep folding.
+use tier core;
+
+fn main() -> i32 {
+    if str_is_empty("") { print_str("empty ok"); } else { print_str("empty bad"); }
+    if str_is_empty("x") { print_str("bad"); } else { print_str("nonempty ok"); }
+    if str_starts_with("abc", 97) { print_str("starts ok"); }
+    print_i32(str_count_byte("hello", 108));
+    print_i32(str_sum_bytes("ABC"));
+    return 0;
+}

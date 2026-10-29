@@ -1,0 +1,16 @@
+// stdlib smoke: kernel math via ralt.yaml dep folding.
+use tier core;
+
+fn main() -> i32 {
+    print_i32(min_i32(3, 9));
+    print_i32(max_i32(3, 9));
+    print_i32(clamp_i32(150, 0, 100));
+    print_i32(abs_i32(0 - 7));
+    print_i32(gcd_i32(48, 18));
+    if is_prime_i32(17) { print_str("prime"); } else { print_str("not prime"); }
+    if is_prime_i32(15) { print_str("bad"); } else { print_str("composite"); }
+    print_i32(sign_i32(0 - 5));
+    print_i32(sign_i32(0));
+    print_i32(sign_i32(9));
+    return 0;
+}

@@ -1,0 +1,32 @@
+// stdlib/core/optutil.tp - helpers over opt<i32> (tier core).
+// v0 note: opt carries scalar/struct only; these cover the i32 case.
+
+use tier core;
+
+fn is_some_i32(x: opt<i32>) -> bool {
+    match x {
+        some(v) => { return true; }
+        none => { return false; }
+    }
+}
+
+fn is_none_i32(x: opt<i32>) -> bool {
+    match x {
+        some(v) => { return false; }
+        none => { return true; }
+    }
+}
+
+fn unwrap_or_i32(x: opt<i32>, d: i32) -> i32 {
+    match x {
+        some(v) => { return v; }
+        none => { return d; }
+    }
+}
+
+fn map_or_i32(x: opt<i32>, d: i32, add: i32) -> i32 {
+    match x {
+        some(v) => { return v + add; }
+        none => { return d; }
+    }
+}

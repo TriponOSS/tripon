@@ -1,0 +1,33 @@
+// stdlib/core/strutil.tp - string helpers over builtin str (tier core).
+// Strings are immutable views; helpers compute over len()/indexing.
+
+use tier core;
+
+fn str_is_empty(s: str) -> bool {
+    return len(s) == 0;
+}
+
+fn str_starts_with(a: str, b: i32) -> bool {
+    if len(a) == 0 { return false; }
+    return cast<i32>(a[0]) == b;
+}
+
+fn str_count_byte(s: str, want: i32) -> i32 {
+    let n = 0;
+    let i = 0;
+    while i < len(s) {
+        if cast<i32>(s[i]) == want { n += 1; }
+        i += 1;
+    }
+    return n;
+}
+
+fn str_sum_bytes(s: str) -> i32 {
+    let n = 0;
+    let i = 0;
+    while i < len(s) {
+        n += cast<i32>(s[i]);
+        i += 1;
+    }
+    return n;
+}

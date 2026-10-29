@@ -1,0 +1,18 @@
+// stdlib smoke: core opt/result helpers via ralt.yaml dep folding.
+use tier core;
+
+fn main() -> i32 {
+    print_i32(unwrap_or_i32(some(7), 0));
+    print_i32(unwrap_or_i32(none, 99));
+    if is_some_i32(some(1)) { print_str("some yes"); } else { print_str("some no"); }
+    if is_none_i32(none) { print_str("none yes"); } else { print_str("none no"); }
+    print_i32(map_or_i32(some(10), 0, 5));
+    print_i32(map_or_i32(none, 42, 5));
+    print_i32(unwrap_or_result(ok(11), 0));
+    print_i32(unwrap_or_result(err("boom"), 77));
+    if is_ok(ok(1)) { print_str("ok yes"); }
+    if is_err(err("x")) { print_str("err yes"); }
+    print_str(err_or_empty(err("why")));
+    print_str("result done");
+    return 0;
+}

@@ -133,6 +133,16 @@ else
     fail=$((fail + 1)); failed_names="$failed_names tool/deps"
 fi
 
+# stdlib: Tripon-only smoke (kernel math, core opt/result/str) via dep folding
+if sh tests/stdlib_smoke.sh > "$OUT/stdlib.log" 2>&1; then
+    note "ok   stdlib (kernel + core smoke)"
+    pass=$((pass + 3))
+else
+    note "FAIL stdlib"
+    cat "$OUT/stdlib.log"
+    fail=$((fail + 3)); failed_names="$failed_names stdlib"
+fi
+
 # selfhost: Tripon lexer port must replay the bootstrap C lexer token-for-token
 if sh tests/selfhost.sh > "$OUT/selfhost.log" 2>&1; then
     note "ok   selfhost (P3.0 lexer oracle)"

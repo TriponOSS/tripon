@@ -1,0 +1,31 @@
+// stdlib/core/resultutil.tp - helpers over result<i32, str> (tier core).
+
+use tier core;
+
+fn is_ok(x: result<i32, str>) -> bool {
+    match x {
+        ok(v) => { return true; }
+        err(e) => { return false; }
+    }
+}
+
+fn is_err(x: result<i32, str>) -> bool {
+    match x {
+        ok(v) => { return false; }
+        err(e) => { return true; }
+    }
+}
+
+fn unwrap_or_result(x: result<i32, str>, d: i32) -> i32 {
+    match x {
+        ok(v) => { return v; }
+        err(e) => { return d; }
+    }
+}
+
+fn err_or_empty(x: result<i32, str>) -> str {
+    match x {
+        ok(v) => { return ""; }
+        err(e) => { return e; }
+    }
+}
