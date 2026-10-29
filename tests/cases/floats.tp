@@ -1,12 +1,10 @@
 use tier core;
-extern "C" { fn puts(p: str) -> i32; }
-
 fn main() -> i32 {
     let pi = 3.14;
     let r = 2.0;
     let area = pi * r * r;
-    if area > 12.55 && area < 12.57 { puts("float ok"); }
+    if area > 12.55 && area < 12.57 { print_str("float ok"); }
     let s = 2.5e2;
-    if s == 250.0 { puts("exp ok"); }
+    if s == 250.0 { print_str("exp ok"); }
     return 0;
 }

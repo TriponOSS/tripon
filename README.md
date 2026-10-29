@@ -80,8 +80,8 @@ make test               # 42 checks, gcc- and clang-green (incl. self-host oracl
 Run programs:
 
 ```sh
-./build/ralt run examples/hello.tp
-./build/ralt check examples/fib.tp --json   # the full diagnostic contract
+./build/ralt run tests/cases/hello.tp
+./build/ralt check tests/cases/arith.tp --json   # the full diagnostic contract
 ralt init my-app                            # scaffold ralt.yaml + src/main.tp
 ./build/ralt run my-app/src/main.tp --backend cc   # native x86-64 path
 ```
@@ -369,7 +369,6 @@ spec/        grammar.ebnf  tripon.md  errors.csv   ← the language contract (fr
 ralt/src/    the bootstrap compiler: 1 new C file per pass, zero deps
 selfhost/    Tripon-in-Tripon: self-host sources (lexer + parser ports done)
 stdlib/      tier-managed standard library (grows with P1.2)
-examples/    runnable .tp programs (hello, fib, report, ...)
 tests/       frozen contract: cases + goldens + determinism + deps + selfhost oracle
 bench/       builder benchmarks → README numbers
 ```

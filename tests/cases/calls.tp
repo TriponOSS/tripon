@@ -1,10 +1,9 @@
 use tier core;
-extern "C" { fn puts(p: str) -> i32; }
 
 fn add(a: i32, b: i32) -> i32 { return a + b; }
 fn twice(x: i32) -> i32 { return x * 2; }
 fn greet(name: str) -> i32 {
-    puts(name);
+    print_str(name);
     return 0;
 }
 

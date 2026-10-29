@@ -12,7 +12,7 @@ frame() {
 }
 
 body_init='{"jsonrpc":"2.0","id":9,"method":"initialize","params":{}}'
-body_open='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tests/cases/check_typemismatch.tp","languageId":"tripon","version":1,"text":"use tier core;\nextern \"C\" { fn puts(p: str) -> i32; }\n\nfn main() -> i32 {\n    let x = 5 + \"hello\";\n    return 0;\n}\n"}}}'
+body_open='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tests/cases/check_typemismatch.tp","languageId":"tripon","version":1,"text":"use tier core;\n\nfn main() -> i32 {\n    let x = 5 + \"hello\";\n    return 0;\n}\n"}}}'
 body_shutdown='{"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}}'
 body_exit='{"jsonrpc":"2.0","method":"exit","params":{}}'
 

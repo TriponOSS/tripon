@@ -1,5 +1,4 @@
 use tier core;
-extern "C" { fn puts(p: str) -> i32; }
 
 fn main() -> i32 {
     let a = 7;
@@ -16,14 +15,14 @@ fn main() -> i32 {
     let f = cast<f64>(5);
     print_f64(f);
     let half = cast<f64>(7) / 2.0;
-    if half == 3.5 { puts("fdiv ok"); }
+    if half == 3.5 { print_str("fdiv ok"); }
     let small = cast<i8>(100);
     print_i32(cast<i32>(small));
     small += cast<i8>(3);
     print_i32(cast<i32>(small));
     let u = cast<u32>(0);
     u += cast<u32>(7);
-    if cast<i32>(u) == 7 { puts("u ok"); }
+    if cast<i32>(u) == 7 { print_str("u ok"); }
     let s16 = cast<i16>(-300);
     print_i32(cast<i32>(s16));
     return 0;

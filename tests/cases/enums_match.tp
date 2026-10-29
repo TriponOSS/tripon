@@ -1,15 +1,13 @@
 use tier core;
-extern "C" { fn puts(p: str) -> i32; }
-
 enum Status { Ok, Err, Pending }
 enum Res { Good(i32), Bad(str), Empty }
 enum Pair { P(i32, i32), None }
 
 fn label(s: Status) -> i32 {
     match s {
-        Ok => { puts("bare ok"); }
-        Status::Err => { puts("err"); }
-        Status::Pending => { puts("pending"); }
+        Ok => { print_str("bare ok"); }
+        Status::Err => { print_str("err"); }
+        Status::Pending => { print_str("pending"); }
     }
     return 0;
 }
@@ -26,15 +24,15 @@ fn show(r: Res) -> i32 {
 fn pair_sum(pr: Pair) -> i32 {
     match pr {
         Pair::P(a, b) => { print_i32(a + b); }
-        Pair::None => { puts("none"); }
+        Pair::None => { print_str("none"); }
     }
     return 0;
 }
 
 fn use_wild(x: Status) -> i32 {
     match x {
-        Status::Ok => { puts("wild ok"); }
-        _ => { puts("wild rest"); }
+        Status::Ok => { print_str("wild ok"); }
+        _ => { print_str("wild rest"); }
     }
     return 0;
 }
@@ -52,14 +50,14 @@ fn main() -> i32 {
     use_wild(Status::Pending);
     let n = 0;
     match n {
-        2 => { puts("two"); }
-        0 => { puts("zero"); }
-        _ => { puts("num other"); }
+        2 => { print_str("two"); }
+        0 => { print_str("zero"); }
+        _ => { print_str("num other"); }
     }
     let flag = true;
     match flag {
-        true => { puts("flag on"); }
-        false => { puts("flag off"); }
+        true => { print_str("flag on"); }
+        false => { print_str("flag off"); }
     }
     return 0;
 }

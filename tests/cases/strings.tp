@@ -1,8 +1,6 @@
 use tier core;
-extern "C" { fn puts(p: str) -> i32; }
-
 fn main() -> i32 {
-    puts("tab:\there \"quoted\"");
-    puts("nl\nnext");
+    print_str("tab:\there \"quoted\"");
+    print_str("nl\nnext");
     return 0;
 }

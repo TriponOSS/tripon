@@ -1,9 +1,5 @@
 use tier core;
 
-extern "C" {
-    fn puts(p: str) -> i32;
-}
-
 fn main() -> i32 {
     let x = 5;
     const LIMIT = 4;
@@ -13,8 +9,8 @@ fn main() -> i32 {
         total = total + x;
         idx += 1;
     }
-    if total == 20 { puts("hello loop"); }
-    else { puts("bad math"); }
-    puts("done");
+    if total == 20 { print_str("hello loop"); }
+    else { print_str("bad math"); }
+    print_str("done");
     return 0;
 }
