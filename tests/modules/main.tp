@@ -1,0 +1,8 @@
+use tier core;
+use "lib/math.tp" as math;
+
+fn main() -> i32 {
+    print_i32(math::add(1, 2));
+    print_i32(math::add2(3, 4));
+    return 0;
+}

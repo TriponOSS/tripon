@@ -1,0 +1,5 @@
+use tier core;
+use "lib/math.tp" as m;
+use "lib/math.tp" as m;
+
+fn main() -> i32 { return 0; }

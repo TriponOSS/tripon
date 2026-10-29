@@ -155,6 +155,17 @@ else
     fail=$((fail + 1)); failed_names="$failed_names stdlib"
 fi
 
+# modules: use "file" as alias; + alias::pub_fn, pub enforcement, fmt
+if sh tests/module_smoke.sh > "$OUT/modules.log" 2>&1; then
+    nmod=$(grep -c '^  ok' "$OUT/modules.log")
+    note "ok   modules ($nmod cases)"
+    pass=$((pass + nmod))
+else
+    note "FAIL modules"
+    cat "$OUT/modules.log"
+    fail=$((fail + 1)); failed_names="$failed_names modules"
+fi
+
 # lint: tier ceiling enforcement (features above the declared tier are E0301)
 if sh tests/lint_smoke.sh > "$OUT/lint.log" 2>&1; then
     nlint=$(grep -c '^  ok' "$OUT/lint.log")

@@ -21,3 +21,7 @@ E0602,warn,unreachable-code,this line can never execute after an earlier return 
 E0603,warn,shadowing,binding re-shadows an existing name in scope; rename it
 E9003,trap,division-by-zero-trap,div and mod by zero are defined traps; guard the divisor
 E0212,error,duplicate-match-arm,remove or reorder the repeated arm; match arms are checked top to bottom
+E0701,error,circular-import,module imports form a cycle; break it
+E0702,error,not-exported,add pub to the declaration or call a public one
+E0703,error,module-not-found,check the path in the use statement
+E0704,error,duplicate-module-alias,two imports share an alias; rename one

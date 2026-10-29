@@ -232,6 +232,25 @@ hard error E0301 — never "kinda works, probably".
 The tier ladder is enforced per-file: a stdlib `use` raises requirements via
 the manifest of the `use`d module. And nothing silently degrades.
 
+### Modules
+
+Each file is a module. `pub` exports a function; `use "path" as alias;` imports
+one and `alias::fn(...)` calls it:
+
+```tripon
+use "lib/math.tp" as math;
+
+fn main() -> i32 {
+    print_i32(math::add(2, 3));
+    return 0;
+}
+```
+
+Module functions are renamed to `alias__name` inside the translation unit, so
+two modules can define the same function name. Non-`pub` functions stay private
+to their file: `alias::private_fn` is E0702. Missing files are E0703 and
+duplicate aliases E0704. Types are not namespaced yet.
+
 ### Determinism
 
 Same source, byte-identical compiled output, every build, tested by CI
@@ -347,6 +366,10 @@ prove them.
 - [x] **Content-addressed lockfile.** `ralt lock` hashes each dep tree
       (FNV-1a over sorted paths + bytes) into `ralt.lock`; deterministic, and
       changes when dep content changes
+- [x] **Module system (phase 1).** `pub` exports, `use "file.tp" as alias;`,
+      qualified `alias::fn(...)` calls; functions are mangled per alias, private
+      names rejected (E0702), missing module E0703, duplicate alias E0704.
+      Types and selective imports are the next slice
 - [ ] Ideation: package cache keyed by those hashes
 
 Phase detail lives in [PLAN.md](PLAN.md).
