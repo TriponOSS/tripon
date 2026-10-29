@@ -135,6 +135,7 @@ static const Builtin BUILTINS[] = {
     {"gui_entry_text",  TY_STR, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
     {"gui_widget_show", TY_VOID, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
     {"gui_window_show", TY_VOID, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"gui_window_box",  TY_I32, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
     {"gui_show",        TY_VOID, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
     {"gui_hide",        TY_VOID, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
     {"gui_hbox_new",    TY_I32, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},

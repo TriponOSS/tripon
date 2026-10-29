@@ -412,7 +412,7 @@ static bool is_builtin(const char *name) {
     static const char *B[] = {"print_i32", "print_i64", "print_f64", "print_str", "len",
         "gui_init", "gui_window_new", "gui_run", "webview_new", "webview_load",
         "gui_entry_new", "gui_button_new", "gui_button_onclick", "gui_entry_text",
-        "gui_widget_show", "gui_window_show", "gui_show", "gui_hide",
+        "gui_widget_show", "gui_window_show", "gui_window_box", "gui_show", "gui_hide",
         "gui_hbox_new", "gui_vbox_new", "gui_css", "gui_quit"};
     for (size_t i = 0; i < sizeof B / sizeof B[0]; i++)
         if (strcmp(B[i], name) == 0) return true;
@@ -968,7 +968,9 @@ static void emit_gui_runtime(Cg *g) {
     fputs("static int GNEW(void){ if(GN>=GUI_MAX) return -1; return GN++; }\n", g->out);
     fputs("static void GBTN(GtkButton*b,gpointer d){ int id=GPOINTER_TO_INT(d); if(id>=0 && id<GUI_MAX && GCB[id]) GCB[id](); }\n", g->out);
     fputs("static int32_t tp_builtin_gui_init(void){ gtk_init(NULL,NULL); return 0; }\n", g->out);
-    fputs("static int32_t tp_builtin_gui_window_new(const char *title){ int id=GNEW(); if(id<0) return -1; GtkWidget*w=gtk_window_new(GTK_WINDOW_TOPLEVEL); gtk_window_set_title(GTK_WINDOW(w), title?title:\"Crowbar\"); gtk_window_set_default_size(GTK_WINDOW(w), 1000,700); GtkWidget*b=gtk_box_new(GTK_ORIENTATION_VERTICAL,4); gtk_container_add(GTK_CONTAINER(w),b); G[id]=w; GTYPE[id]=0; int bid=GNEW(); G[bid]=b; GTYPE[bid]=1; gtk_widget_show(b); return id; }\n", g->out);
+    fputs("static int GWINBOX[GUI_MAX];\n", g->out);
+    fputs("static int32_t tp_builtin_gui_window_new(const char *title){ int id=GNEW(); if(id<0) return -1; GtkWidget*w=gtk_window_new(GTK_WINDOW_TOPLEVEL); gtk_window_set_title(GTK_WINDOW(w), title?title:\"Crowbar\"); gtk_window_set_default_size(GTK_WINDOW(w), 1000,700); GtkWidget*b=gtk_box_new(GTK_ORIENTATION_VERTICAL,4); gtk_container_add(GTK_CONTAINER(w),b); G[id]=w; GTYPE[id]=0; int bid=GNEW(); G[bid]=b; GTYPE[bid]=1; GWINBOX[id]=bid; gtk_widget_show(b); return id; }\n", g->out);
+    fputs("static int32_t tp_builtin_gui_window_box(int32_t w){ if(w<0||w>=GUI_MAX) return -1; return GWINBOX[w]; }\n", g->out);
     fputs("static GtkWidget *GB(int id){ return (id>=0&&id<GUI_MAX)?G[id]:NULL; }\n", g->out);
     fputs("static int tp_builtin_gui_hbox_new(int32_t parent){ int id=GNEW(); if(id<0) return -1; GtkWidget*b=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,4); if(parent>=0&&parent<GUI_MAX&&G[parent]) gtk_box_pack_start(GTK_BOX(G[parent]), b, FALSE, FALSE, 0); G[id]=b; GTYPE[id]=1; gtk_widget_show(b); return id; }\n", g->out);
     fputs("static int tp_builtin_gui_vbox_new(int32_t parent){ int id=GNEW(); if(id<0) return -1; GtkWidget*b=gtk_box_new(GTK_ORIENTATION_VERTICAL,4); if(parent>=0&&parent<GUI_MAX&&G[parent]) gtk_box_pack_start(GTK_BOX(G[parent]), b, TRUE, TRUE, 0); G[id]=b; GTYPE[id]=1; gtk_widget_show(b); return id; }\n", g->out);
