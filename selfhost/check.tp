@@ -994,6 +994,435 @@ fn dmptext(m: P) -> P {
 }
 
 // phase-L driver: replay `ralt tokens` output from TP_SRC
+// ---------------- pass A: collect function signatures ----------------
+// Registers one fn into the FN/NP tables; body is skipped (parsed later).
+// On entry m.tk == TK_FN. Returns with m.tk past the fn (body consumed if present).
+fn parse_fn_sig(m: P) -> P {
+    // expect 'fn'
+    if m.tk != 5 {
+        return m;
+    }
+    m = adv(m); // fn
+    if m.tk != 1 {
+        return m;
+    }
+    let ns = m.ts;
+    let nl = m.tl;
+    let sl = m.tline;
+    let sc = m.tcol;
+    m = adv(m); // name
+    // seg for name
+    m = seg_new(m, ns, ns + nl);
+    let nameSeg = m.pln;
+    // params
+    let pbase = m.NP;
+    let pcnt = 0;
+    if m.tk == 23 {
+        m = adv(m); // (
+        let going = true;
+        while going {
+            going = false;
+            if m.tk != 24 && m.tk != 0 {
+                // param name
+                if m.tk == 1 {
+                    m = adv(m);
+                }
+                if m.tk == 31 {
+                    m = adv(m); // :
+                }
+                m = parse_type(m);
+                // register param
+                if m.NP < 128 {
+                    m.PNN[m.NP] = nameSeg;
+                    m.PTY[m.NP] = m.ty;
+                    m.PTN[m.NP] = m.tn;
+                    m.PPLN[m.NP] = sl;
+                    m.PPCL[m.NP] = sc;
+                    m.PPLG[m.NP] = 1;
+                    m.NP = m.NP + 1;
+                    pcnt = pcnt + 1;
+                }
+                if m.tk == 29 {
+                    m = adv(m);
+                    going = true;
+                }
+            }
+        }
+        if m.tk == 24 {
+            m = adv(m); // )
+        }
+    }
+    // return type
+    let rty = 14;
+    let rtn = 0 - 1;
+    if m.tk == 34 {
+        m = adv(m); // ->
+        m = parse_type(m);
+        rty = m.ty;
+        rtn = m.tn;
+    }
+    // register fn
+    if m.NF < 64 {
+        m.FN[m.NF] = nameSeg;
+        m.FLN[m.NF] = sl;
+        m.FCL[m.NF] = sc;
+        m.FLG[m.NF] = 1;
+        m.FRT[m.NF] = rty;
+        m.FRTN[m.NF] = rtn;
+        m.FPP[m.NF] = pbase;
+        m.FPPn[m.NF] = pcnt;
+        m.FBN[m.NF] = 0;
+        m.FBE[m.NF] = 0;
+        m.FSP[m.NF] = sl;
+        m.NF = m.NF + 1;
+    }
+    // parse body if present (typechecks expressions inline)
+    if m.tk == 27 {
+        m = adv(m); // {
+        let scanning = true;
+        while scanning {
+            scanning = false;
+            if m.tk == 28 {
+                m = adv(m);
+                scanning = false;
+            } else if m.tk == 0 {
+                scanning = false;
+            } else {
+                m = parse_stmt(m);
+                scanning = true;
+            }
+        }
+    } else {
+        if m.tk == 30 {
+            m = adv(m); // ;
+        }
+    }
+    return m;
+}
+
+// ---------------- top-level decl walk (pass A driver) ----------------
+fn parse_decls(m: P) -> P {
+    let running = true;
+    while running {
+        running = false;
+        if m.tk == 0 {
+            running = false;
+        } else if m.tk == 15 {
+            // use tier X;
+            m = adv(m);
+            if m.tk == 16 { m = adv(m); }
+            if m.tk == 1 { m = adv(m); }
+            if m.tk == 30 { m = adv(m); }
+            running = true;
+        } else if m.tk == 17 {
+            // extern "C" { ... }
+            m = adv(m);
+            if m.tk == 4 { m = adv(m); }
+            if m.tk == 27 { m = adv(m); }
+            let inner = true;
+            while inner {
+                inner = false;
+                if m.tk == 5 {
+                    m = parse_fn_sig(m);
+                    inner = true;
+                } else if m.tk == 28 {
+                    m = adv(m);
+                    inner = false;
+                } else if m.tk != 0 && m.tk != 28 {
+                    m = adv(m);
+                    inner = true;
+                }
+            }
+            running = true;
+        } else if m.tk == 13 {
+            // struct: skip to matching brace
+            m = adv(m);
+            if m.tk == 1 { m = adv(m); }
+            let depth = 0;
+            let scanning = true;
+            if m.tk == 27 { depth = 1; m = adv(m); scanning = true; }
+            while scanning {
+                scanning = false;
+                if m.tk == 27 { depth = depth + 1; m = adv(m); scanning = true; }
+                else if m.tk == 28 { depth = depth - 1; m = adv(m); if depth > 0 { scanning = true; } }
+                else if m.tk == 0 { scanning = false; }
+                else { m = adv(m); scanning = true; }
+            }
+            running = true;
+        } else if m.tk == 14 {
+            m = adv(m);
+            if m.tk == 1 { m = adv(m); }
+            let depth = 0;
+            let scanning = true;
+            if m.tk == 27 { depth = 1; m = adv(m); scanning = true; }
+            while scanning {
+                scanning = false;
+                if m.tk == 27 { depth = depth + 1; m = adv(m); scanning = true; }
+                else if m.tk == 28 { depth = depth - 1; m = adv(m); if depth > 0 { scanning = true; } }
+                else if m.tk == 0 { scanning = false; }
+                else { m = adv(m); scanning = true; }
+            }
+            running = true;
+        } else if m.tk == 6 || m.tk == 7 {
+            // let/const: skip to ;
+            m = adv(m);
+            if m.tk == 1 { m = adv(m); }
+            if m.tk == 31 { m = adv(m); m = parse_type(m); }
+            if m.tk == 36 { m = adv(m); m = parse_expr(m); }
+            if m.tk == 30 { m = adv(m); }
+            running = true;
+        } else if m.tk == 5 {
+            m = parse_fn_sig(m);
+            running = true;
+        } else {
+            m = adv(m);
+            running = true;
+        }
+    }
+    return m;
+}
+
+// ---------------- diag code -> name (spec/errors.csv) ----------------
+fn diag_name(code: i32) -> str {
+    if code == 1 { return "unterminated-string"; }
+    if code == 2 { return "invalid-character"; }
+    if code == 3 { return "bad-number-literal"; }
+    if code == 101 { return "unexpected-token"; }
+    if code == 102 { return "missing-token"; }
+    if code == 201 { return "unknown-identifier"; }
+    if code == 202 { return "type-mismatch"; }
+    if code == 203 { return "mutability-required"; }
+    if code == 204 { return "no-null"; }
+    if code == 205 { return "unhandled-result"; }
+    if code == 206 { return "non-exhaustive-match"; }
+    if code == 207 { return "implicit-conversion-denied"; }
+    if code == 301 { return "tier-violation"; }
+    if code == 302 { return "tier-not-declared"; }
+    if code == 501 { return "entry-point-missing"; }
+    if code == 601 { return "unused-binding"; }
+    if code == 602 { return "unreachable-code"; }
+    if code == 9001 { return "integer-overflow-trap"; }
+    if code == 9002 { return "index-out-of-bounds"; }
+    if code == 9003 { return "division-by-zero"; }
+    if code == 9004 { return "cast-out-of-range"; }
+    return "unknown";
+}
+
+// ---------------- statement parser (minimal, body-skipping for now) ----------------
+// Parses one statement; for let/return/if/while/expr. Typechecks expressions
+// inline via parse_expr (which is fused typecheck). Returns m past the stmt.
+fn parse_stmt(m: P) -> P {
+    if m.tk == 6 || m.tk == 7 {
+        // let/const name [: T] [= expr] ;
+        let isConst = 0;
+        if m.tk == 7 { isConst = 1; }
+        m = adv(m); // let/const
+        let ns = 0 - 1;
+        let nl = 0;
+        if m.tk == 1 {
+            ns = m.ts; nl = m.tl;
+            m = adv(m); // name
+            m = seg_new(m, ns, ns + nl);
+            let nameSeg = m.pln;
+            // register local binding
+            if m.NLO < 256 {
+                m.LON[m.NLO] = nameSeg;
+                m.LOT[m.NLO] = 14;
+                m.LTN[m.NLO] = 0 - 1;
+                m.LIC[m.NLO] = isConst;
+                m.LSP[m.NLO] = m.tline;
+                m.LSO[m.NLO] = 0;
+                m.NLO = m.NLO + 1;
+            }
+        }
+        if m.tk == 31 { m = adv(m); m = parse_type(m);
+            // fixup last local type
+            if m.NLO > 0 {
+                m.LOT[m.NLO - 1] = m.ty;
+                m.LTN[m.NLO - 1] = m.tn;
+            }
+        }
+        if m.tk == 36 { m = adv(m); m = parse_expr(m);
+            if m.NLO > 0 && ns >= 0 {
+                m.LOT[m.NLO - 1] = m.ty;
+                m.LTN[m.NLO - 1] = m.tn;
+            }
+        }
+        if m.tk == 30 { m = adv(m); }
+        return m;
+    }
+    if m.tk == 8 {
+        m = adv(m); // return
+        if m.tk != 30 {
+            m = parse_expr(m);
+        }
+        if m.tk == 30 { m = adv(m); }
+        return m;
+    }
+    if m.tk == 9 {
+        m = adv(m); // if
+        m = parse_expr(m);
+        if m.tk == 27 { m = adv(m); }
+        // parse body stmts until }
+        let depth = 1;
+        let scanning = true;
+        while scanning {
+            scanning = false;
+            if m.tk == 27 { depth = depth + 1; m = adv(m); scanning = true; }
+            else if m.tk == 28 { depth = depth - 1; m = adv(m); if depth > 0 { scanning = true; } }
+            else if m.tk == 0 { scanning = false; }
+            else { m = parse_stmt(m); scanning = true; }
+        }
+        if m.tk == 10 {
+            m = adv(m); // else
+            if m.tk == 27 { m = adv(m); }
+            let depth2 = 1;
+            let scanning2 = true;
+            while scanning2 {
+                scanning2 = false;
+                if m.tk == 27 { depth2 = depth2 + 1; m = adv(m); scanning2 = true; }
+                else if m.tk == 28 { depth2 = depth2 - 1; m = adv(m); if depth2 > 0 { scanning2 = true; } }
+                else if m.tk == 0 { scanning2 = false; }
+                else { m = parse_stmt(m); scanning2 = true; }
+            }
+        }
+        return m;
+    }
+    if m.tk == 11 {
+        m = adv(m); // while
+        m = parse_expr(m);
+        if m.tk == 27 { m = adv(m); }
+        let depth = 1;
+        let scanning = true;
+        while scanning {
+            scanning = false;
+            if m.tk == 27 { depth = depth + 1; m = adv(m); scanning = true; }
+            else if m.tk == 28 { depth = depth - 1; m = adv(m); if depth > 0 { scanning = true; } }
+            else if m.tk == 0 { scanning = false; }
+            else { m = parse_stmt(m); scanning = true; }
+        }
+        return m;
+    }
+    if m.tk == 12 {
+        // match: skip to matching brace
+        m = adv(m);
+        m = parse_expr(m);
+        if m.tk == 27 { m = adv(m); }
+        let depth = 1;
+        let scanning = true;
+        while scanning {
+            scanning = false;
+            if m.tk == 27 { depth = depth + 1; m = adv(m); scanning = true; }
+            else if m.tk == 28 { depth = depth - 1; m = adv(m); if depth > 0 { scanning = true; } }
+            else if m.tk == 0 { scanning = false; }
+            else { m = adv(m); scanning = true; }
+        }
+        return m;
+    }
+    // expression statement, possibly an assignment
+    // const-reassign peek
+    let constTarget = 0 - 1;
+    if m.tk == 1 {
+        let li = lo_find(m, m.ts, m.tl);
+        if li >= 0 && m.LIC[li] == 1 {
+            constTarget = li;
+        }
+    }
+    m = parse_expr(m);
+    let targetTy = m.ty;
+    let targetTn = m.tn;
+    let isassign = false;
+    let aop = 36;
+    if m.tk == 36 || m.tk == 37 || m.tk == 38 || m.tk == 39 || m.tk == 40 || m.tk == 41 {
+        isassign = true;
+        aop = m.tk;
+        m = adv(m);
+    }
+    if isassign {
+        if constTarget >= 0 {
+            m = mbeg(m);
+            m = cpC(m, "is const and cannot be reassigned");
+            m = diagc(m, 203, 0, m.tline, m.tcol, 1, "declared const but reassigned; switch to let");
+        }
+        m = parse_expr(m);
+        // type checks
+        if targetTy >= 0 && m.ty >= 0 && !ty_same(m, targetTy, targetTn, m.ty, m.tn) {
+            m = mbeg(m);
+            m = cpC(m, "cannot assign");
+            m = diagc(m, 202, 0, m.X0L, m.X0C, 1, "types must match exactly; no implicit conversion exists; use cast<T>(x)");
+        }
+        if m.tk == 30 { m = adv(m); }
+        return m;
+    }
+    if m.tk == 30 { m = adv(m); }
+    return m;
+}
+
+// ---------------- JSON diagnostic emitter (frozen format) ----------------
+fn emit_json(m: P) -> () {
+    putchar(91);
+    let i = 0;
+    while i < m.nd {
+        if i > 0 {
+            putchar(44);
+        }
+        putchar(10);
+        putchar(32);
+        putchar(32);
+        putchar(123);
+        putchar(32);
+        // code
+        put_raw("\"code\": \"E");
+        if m.dcode[i] < 10 { put_raw("000"); }
+        else if m.dcode[i] < 100 { put_raw("00"); }
+        else if m.dcode[i] < 1000 { put_raw("0"); }
+        put_i32(m.dcode[i]);
+        put_raw("\", \"kind\": \"error\", \"name\": \"");
+        put_raw(diag_name(m.dcode[i]));
+        put_raw("\", \"file\": \"");
+        // file name from TP_FILE env, else input.tp
+        let fenv: str = getenv("TP_FILE");
+        let fl = len(fenv);
+        if fl == 0 {
+            put_raw("input.tp");
+        } else {
+            let fi = 0;
+            while fi < fl {
+                putchar(cast<i32>(at(fenv, fi, fl)));
+                fi = fi + 1;
+            }
+        }
+        put_raw("\", \"line\": ");
+        put_i32(m.dln[i]);
+        put_raw(", \"col\": ");
+        put_i32(m.dcl[i]);
+        put_raw(", \"len\": ");
+        put_i32(m.dg[i]);
+        put_raw(", \"msg\": \"");
+        // msg from pool ms..ms+ml
+        let j = 0;
+        while j < m.ml[i] {
+            putchar(cast<i32>(m.pool[m.ms[i] + j]));
+            j = j + 1;
+        }
+        put_raw("\", \"hint\": \"");
+        let k = 0;
+        while k < m.hl[i] {
+            putchar(cast<i32>(m.pool[m.ho[i] + k]));
+            k = k + 1;
+        }
+        put_raw("\" ");
+        putchar(125);
+        i = i + 1;
+    }
+    if m.nd > 0 {
+        putchar(10);
+    }
+    putchar(93);
+    putchar(10);
+    return;
+}
+
 fn main() -> i32 {
     let src = getenv("TP_SRC");
     let n = len(src);
@@ -1012,24 +1441,10 @@ fn main() -> i32 {
             }
         }
     }
-    let running = true;
-    while running {
-        running = false;
-        m = adv(m);
-        put_raw(tokname(m.tk));
-        putchar(32);
-        put_i32(m.tline);
-        putchar(32);
-        put_i32(m.tcol);
-        if m.tk == 1 || m.tk == 4 {
-            putchar(32);
-            m = dmptext(m);
-        }
-        putchar(10);
-        if !(m.tk == 0 && m.ts >= m.n) {
-            running = true;
-        }
-    }
+    // check mode: prime first token, collect decls, emit JSON
+    m = adv(m);
+    m = parse_decls(m);
+    emit_json(m);
     // diags: C ralt tokens prints them on stderr AFTER tokens; carve exact
     let i = 0;
     while i < m.nd {
@@ -1769,8 +2184,8 @@ fn pr_int(m: P) -> P {
     m.LI = 1;
     m.LLI = 1;
     m.LIV = v;
-    m.X0L = m.pln;
-    m.X0C = m.pcl;
+    m.X0L = m.tline;
+    m.X0C = m.tcol;
     return set_ty(m, t, -1);
 }
 
@@ -2180,13 +2595,15 @@ fn parse_bin(m: P, min: i32) -> P {
         let k = m.tk;
         let pr = bin_prec(k);
         if pr >= min {
-            // preserve lhs on m.LTY/LTN; rhs on m.ty/m.tn; join after
-            m.LTY = m.ty;
-            m.LTX = m.tn;
+            // preserve lhs type across rhs parse (rhs may clobber m.LTY)
+            let savedLTY = m.ty;
+            let savedLTX = m.tn;
             let ol = m.tline;
             let oc = m.tcol;
             m = adv(m);
             m = parse_bin(m, pr + 1);
+            m.LTY = savedLTY;
+            m.LTX = savedLTX;
             m = join_bin(m, k, pr, ol, oc);
             going = true;
         }
@@ -2509,7 +2926,7 @@ fn parse_args_f(m: P, frow: i32, np: i32, name: i32, sl: i32, sc: i32) -> P {
                 m = cpC(m, "argument ");
                 m = cpI32(m, aj + 1);
                 m = cpC(m, " of '");
-                m = seg_eq(m, name, 0, 0);
+                m = cpe(m, name);
                 m = cpC(m, "' must be ");
                 m = tyd(m, want, 0 - 1);
                 m = cpC(m, ", got ");
@@ -2533,12 +2950,12 @@ fn parse_args_f(m: P, frow: i32, np: i32, name: i32, sl: i32, sc: i32) -> P {
         m = diagc(m, 202, 0, m.X0L, m.X0C, 1, "match the declared parameter list exactly");
     }
     m.na = n;
-    m = fn_find(m, name);
+    let fidx = frow;
     let ret = 0 - 1;
     let retn = 0 - 1;
-    if m.pln >= 0 {
-        ret = m.FRT[m.pln];
-        retn = m.FRTN[m.pln];
+    if fidx >= 0 {
+        ret = m.FRT[fidx];
+        retn = m.FRTN[fidx];
     }
     return set_ty(m, ret, retn);
 }
