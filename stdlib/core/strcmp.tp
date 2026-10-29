@@ -1,0 +1,55 @@
+// stdlib/core/strcmp.tp - string search + lexicographic compare (tier core).
+// str is an immutable utf8 view; these read via len()/indexing.
+
+use tier core;
+
+fn str_index_of(s: str, want: i32) -> i32 {
+    let i = 0;
+    while i < len(s) {
+        if cast<i32>(s[i]) == want { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn str_contains(s: str, want: i32) -> bool {
+    return str_index_of(s, want) >= 0;
+}
+
+// -1 / 0 / 1, byte-wise then length (matches C strcmp ordering).
+fn str_compare(a: str, b: str) -> i32 {
+    let n = len(a);
+    if len(b) < n { n = len(b); }
+    let i = 0;
+    while i < n {
+        let ca = cast<i32>(a[i]);
+        let cb = cast<i32>(b[i]);
+        if ca < cb { return 0 - 1; }
+        if ca > cb { return 1; }
+        i += 1;
+    }
+    if len(a) < len(b) { return 0 - 1; }
+    if len(a) > len(b) { return 1; }
+    return 0;
+}
+
+fn str_equal(a: str, b: str) -> bool {
+    return str_compare(a, b) == 0;
+}
+
+fn lower_code(c: i32) -> i32 {
+    if c >= 65 && c <= 90 { return c + 32; }
+    return c;
+}
+
+fn str_eq_ci(a: str, b: str) -> bool {
+    if len(a) != len(b) { return false; }
+    let i = 0;
+    while i < len(a) {
+        if lower_code(cast<i32>(a[i])) != lower_code(cast<i32>(b[i])) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}

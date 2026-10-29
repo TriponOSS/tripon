@@ -1,0 +1,17 @@
+// strcmp stdlib smoke: search, lexicographic compare, case-insensitive eq.
+use tier core;
+
+fn main() -> i32 {
+    print_i32(str_index_of("hello", 108));
+    print_i32(str_index_of("hello", 122));
+    if str_contains("abc", 98) { print_str("has b"); }
+    if str_contains("abc", 122) { print_str("bad"); } else { print_str("no z"); }
+    print_i32(str_compare("abc", "abd"));
+    print_i32(str_compare("abc", "abc"));
+    print_i32(str_compare("abd", "abc"));
+    print_i32(str_compare("ab", "abc"));
+    if str_equal("same", "same") { print_str("eq yes"); }
+    if str_eq_ci("Hello", "hELLO") { print_str("ci yes"); }
+    if str_eq_ci("Hello", "world") { print_str("bad"); } else { print_str("ci no"); }
+    return 0;
+}

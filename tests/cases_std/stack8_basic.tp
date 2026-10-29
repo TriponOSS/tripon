@@ -1,0 +1,26 @@
+// stack8 stdlib smoke: fixed-capacity LIFO.
+use tier core;
+
+fn main() -> i32 {
+    let s = stack8_init();
+    if stack8_is_empty(s) { print_str("empty yes"); }
+    s = stack8_push(s, 10);
+    s = stack8_push(s, 20);
+    s = stack8_push(s, 30);
+    print_i32(stack8_len(s));
+    print_i32(unwrap_or_i32(stack8_peek(s), 0 - 1));
+    print_i32(stack8_sum(s));
+    s = stack8_pop(s);
+    print_i32(unwrap_or_i32(stack8_peek(s), 0 - 1));
+    print_i32(stack8_len(s));
+    let i = 0;
+    while i < 6 {
+        s = stack8_push(s, i);
+        i += 1;
+    }
+    print_i32(stack8_len(s));
+    if stack8_is_full(s) { print_str("full yes"); }
+    s = stack8_push(s, 99);
+    print_i32(stack8_len(s));
+    return 0;
+}

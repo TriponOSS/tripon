@@ -1,0 +1,78 @@
+// stdlib/core/buf16.tp - fixed-capacity byte buffer, tier core.
+// Struct-wrapped [16]u8; updates are by-value copies (v0 arrays are
+// function-local, so the buffer never travels as a bare array param).
+
+use tier core;
+
+struct Buf16 { b: [16]u8; n: i32; }
+
+fn buf16_init() -> Buf16 {
+    let x: Buf16;
+    let i = 0;
+    while i < 16 {
+        x.b[i] = cast<u8>(0);
+        i += 1;
+    }
+    x.n = 0;
+    return x;
+}
+
+fn buf16_len(x: Buf16) -> i32 {
+    return x.n;
+}
+
+fn buf16_cap(x: Buf16) -> i32 {
+    return 16;
+}
+
+fn buf16_is_full(x: Buf16) -> bool {
+    return x.n >= 16;
+}
+
+fn buf16_is_empty(x: Buf16) -> bool {
+    return x.n == 0;
+}
+
+fn buf16_push(x0: Buf16, c: i32) -> Buf16 {
+    let x = x0;
+    if x.n < 16 {
+        x.b[x.n] = cast<u8>(c % 256);
+        x.n += 1;
+    }
+    return x;
+}
+
+fn buf16_get(x: Buf16, i: i32) -> opt<i32> {
+    if i < 0 || i >= x.n { return none; }
+    return some(cast<i32>(x.b[i]));
+}
+
+fn buf16_set(x0: Buf16, i: i32, c: i32) -> Buf16 {
+    let x = x0;
+    if i >= 0 && i < x.n { x.b[i] = cast<u8>(c % 256); }
+    return x;
+}
+
+fn buf16_sum(x: Buf16) -> i32 {
+    let s = 0;
+    let i = 0;
+    while i < x.n {
+        s = s + cast<i32>(x.b[i]);
+        i += 1;
+    }
+    return s;
+}
+
+// Fletcher-style running checksum over the bytes (deterministic, no overflow
+// for 16 bytes: max 16*255 = 4080 per lane).
+fn buf16_crc(x: Buf16) -> i32 {
+    let a = 0;
+    let b = 0;
+    let i = 0;
+    while i < x.n {
+        a = (a + cast<i32>(x.b[i])) % 251;
+        b = (b + a) % 251;
+        i += 1;
+    }
+    return a * 251 + b;
+}

@@ -1,0 +1,20 @@
+// buf16 stdlib smoke: fixed byte buffer + checksum.
+use tier core;
+
+fn main() -> i32 {
+    let x = buf16_init();
+    if buf16_is_empty(x) { print_str("empty yes"); }
+    x = buf16_push(x, 65);
+    x = buf16_push(x, 66);
+    x = buf16_push(x, 300);
+    print_i32(buf16_len(x));
+    print_i32(cast<i32>(x.b[0]));
+    print_i32(cast<i32>(x.b[2]));
+    print_i32(buf16_sum(x));
+    print_i32(unwrap_or_i32(buf16_get(x, 1), 0 - 1));
+    print_i32(unwrap_or_i32(buf16_get(x, 9), 0 - 1));
+    x = buf16_set(x, 0, 90);
+    print_i32(cast<i32>(x.b[0]));
+    print_i32(buf16_crc(x));
+    return 0;
+}

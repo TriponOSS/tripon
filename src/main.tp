@@ -1,0 +1,11 @@
+use tier core;
+
+// tripon - the repo's own smoke program (.tp): exercises the stdlib.
+fn main() -> i32 {
+    print_str("hello, tripon");
+    print_i32(clamp_i32(150, 0, 100));
+    print_i32(gcd_i32(48, 18));
+    print_i32(unwrap_or_i32(some(7), 0));
+    print_f64(sqrt_newton(144.0));
+    return 0;
+}

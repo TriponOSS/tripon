@@ -1,0 +1,43 @@
+// integration: compose several stdlib modules in one program.
+use tier core;
+
+fn main() -> i32 {
+    // kernel math + core float
+    print_i32(clamp_i32(250, 0, 100));
+    print_i32(gcd_i32(1071, 462));
+    print_f64(sqrt_newton(81.0));
+
+    // fixed vector
+    let v = vec4_init();
+    v = vec4_push(v, 4);
+    v = vec4_push(v, 8);
+    v = vec4_push(v, 15);
+    print_i32(vec4_sum(v));
+    print_i32(unwrap_or_i32(vec4_max(v), 0));
+
+    // fixed map
+    let m = map8_init();
+    m = map8_put(m, 10, 100);
+    m = map8_put(m, 20, 200);
+    print_i32(map8_sum_values(m));
+
+    // stack
+    let s = stack8_init();
+    s = stack8_push(s, 1);
+    s = stack8_push(s, 2);
+    s = stack8_push(s, 3);
+    print_i32(stack8_sum(s));
+
+    // byte buffer
+    let b = buf16_init();
+    b = buf16_push(b, 65);
+    b = buf16_push(b, 66);
+    print_i32(buf16_sum(b));
+
+    // strings
+    if str_contains("integration", 101) { print_str("has e"); }
+    print_i32(str_compare("aaa", "bbb"));
+
+    print_str("integration done");
+    return 0;
+}

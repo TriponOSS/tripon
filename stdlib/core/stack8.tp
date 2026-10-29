@@ -1,0 +1,60 @@
+// stdlib/core/stack8.tp - fixed-capacity LIFO stack, tier core.
+// Struct-wrapped fixed array; updates are by-value copies (v0 arrays are
+// function-local, so the stack rides inside a struct).
+
+use tier core;
+
+struct Stack8 { a: [8]i32; n: i32; }
+
+fn stack8_init() -> Stack8 {
+    let s: Stack8;
+    let i = 0;
+    while i < 8 {
+        s.a[i] = 0;
+        i += 1;
+    }
+    s.n = 0;
+    return s;
+}
+
+fn stack8_len(s: Stack8) -> i32 {
+    return s.n;
+}
+
+fn stack8_is_empty(s: Stack8) -> bool {
+    return s.n == 0;
+}
+
+fn stack8_is_full(s: Stack8) -> bool {
+    return s.n >= 8;
+}
+
+fn stack8_push(s0: Stack8, x: i32) -> Stack8 {
+    let s = s0;
+    if s.n < 8 {
+        s.a[s.n] = x;
+        s.n += 1;
+    }
+    return s;
+}
+
+fn stack8_peek(s: Stack8) -> opt<i32> {
+    if s.n == 0 { return none; }
+    return some(s.a[s.n - 1]);
+}
+
+fn stack8_pop(s0: Stack8) -> Stack8 {
+    let s = s0;
+    if s.n > 0 { s.n -= 1; }
+    return s;
+}
+
+fn stack8_sum(s: Stack8) -> i32 {
+    let t = 0;
+    let i = 0;
+    while i < s.n {
+        t += s.a[i];
+        i += 1;
+    }
+    return t;
+}

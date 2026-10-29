@@ -16,6 +16,8 @@ stdlib/
   core/vec4.tp        fixed-capacity [4]i32 vector in a struct
   core/map8.tp        fixed-capacity i32->i32 map (linear probe)
   core/queue8.tp      fixed-capacity FIFO ring
+  core/buf16.tp       fixed-capacity byte buffer + Fletcher-style checksum
+  core/strcmp.tp      byte search, lexicographic compare, case-insensitive eq
 ```
 
 Consumption: `stdlib/` is a plain local dep — point any `ralt.yaml` at it:
