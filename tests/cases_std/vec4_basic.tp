@@ -1,0 +1,25 @@
+// vec4 stdlib smoke: fixed-capacity vector via struct, by-value updates.
+use tier core;
+
+fn main() -> i32 {
+    let v = vec4_init();
+    print_i32(vec4_len(v));
+    if vec4_is_empty(v) { print_str("empty yes"); }
+    v = vec4_push(v, 10);
+    v = vec4_push(v, 20);
+    v = vec4_push(v, 30);
+    print_i32(vec4_len(v));
+    print_i32(vec4_sum(v));
+    print_i32(unwrap_or_i32(vec4_get(v, 1), 0 - 1));
+    print_i32(unwrap_or_i32(vec4_get(v, 9), 0 - 1));
+    print_i32(unwrap_or_i32(vec4_max(v), 0));
+    print_i32(unwrap_or_i32(vec4_min(v), 0));
+    v = vec4_push(v, 40);
+    print_i32(vec4_len(v));
+    if vec4_is_full(v) { print_str("full yes"); }
+    v = vec4_push(v, 50);
+    print_i32(vec4_len(v));
+    v = vec4_set(v, 0, 99);
+    print_i32(vec4_sum(v));
+    return 0;
+}

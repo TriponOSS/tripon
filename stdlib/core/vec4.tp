@@ -1,0 +1,86 @@
+// stdlib/core/vec4.tp - fixed-capacity i32 vector, tier core.
+// v0 constraint: arrays are function-local and not passable as params, so the
+// vector lives inside a struct and is passed by value (copy-on-update).
+
+use tier core;
+
+struct Vec4 { a: [4]i32; n: i32; }
+
+fn vec4_init() -> Vec4 {
+    let v: Vec4;
+    let i = 0;
+    while i < 4 {
+        v.a[i] = 0;
+        i += 1;
+    }
+    v.n = 0;
+    return v;
+}
+
+fn vec4_len(v: Vec4) -> i32 {
+    return v.n;
+}
+
+fn vec4_cap(v: Vec4) -> i32 {
+    return 4;
+}
+
+fn vec4_is_full(v: Vec4) -> bool {
+    return v.n >= 4;
+}
+
+fn vec4_is_empty(v: Vec4) -> bool {
+    return v.n == 0;
+}
+
+fn vec4_push(v0: Vec4, x: i32) -> Vec4 {
+    let v = v0;
+    if v.n < 4 {
+        v.a[v.n] = x;
+        v.n += 1;
+    }
+    return v;
+}
+
+fn vec4_get(v: Vec4, i: i32) -> opt<i32> {
+    if i < 0 || i >= v.n { return none; }
+    return some(v.a[i]);
+}
+
+fn vec4_set(v0: Vec4, i: i32, x: i32) -> Vec4 {
+    let v = v0;
+    if i >= 0 && i < v.n { v.a[i] = x; }
+    return v;
+}
+
+fn vec4_sum(v: Vec4) -> i32 {
+    let s = 0;
+    let i = 0;
+    while i < v.n {
+        s += v.a[i];
+        i += 1;
+    }
+    return s;
+}
+
+fn vec4_max(v: Vec4) -> opt<i32> {
+    if v.n == 0 { return none; }
+    let m = v.a[0];
+    let i = 1;
+    while i < v.n {
+        if v.a[i] > m { m = v.a[i]; }
+        i += 1;
+    }
+    return some(m);
+}
+
+fn vec4_min(v: Vec4) -> opt<i32> {
+    if v.n == 0 { return none; }
+    let m = v.a[0];
+    let i = 1;
+    while i < v.n {
+        if v.a[i] < m { m = v.a[i]; }
+        i += 1;
+    }
+    return some(m);
+}
