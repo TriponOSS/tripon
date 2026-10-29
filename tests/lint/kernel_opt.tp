@@ -1,0 +1,6 @@
+use tier kernel;
+
+fn main() -> i32 {
+    let x: opt<i32> = none;
+    return 0;
+}

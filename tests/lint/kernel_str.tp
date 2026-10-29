@@ -1,0 +1,5 @@
+use tier kernel;
+
+fn hi() -> str { return "x"; }
+
+fn main() -> i32 { return 0; }

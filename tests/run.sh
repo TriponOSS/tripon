@@ -145,6 +145,17 @@ else
     fail=$((fail + 1)); failed_names="$failed_names stdlib"
 fi
 
+# lint: tier ceiling enforcement (features above the declared tier are E0301)
+if sh tests/lint_smoke.sh > "$OUT/lint.log" 2>&1; then
+    nlint=$(grep -c '^  ok' "$OUT/lint.log")
+    note "ok   lint ($nlint cases)"
+    pass=$((pass + nlint))
+else
+    note "FAIL lint"
+    cat "$OUT/lint.log"
+    fail=$((fail + 1)); failed_names="$failed_names lint"
+fi
+
 # native: P4.4 slice — x86-64 backend must match the C backend on the cases
 # it supports today (scalars, str, floats, traps); aggregates are skipped
 if sh tests/native_parity.sh > "$OUT/native.log" 2>&1; then

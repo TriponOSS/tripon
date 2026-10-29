@@ -1,0 +1,9 @@
+use tier core;
+
+fn main() -> i32 {
+    let x: opt<i32> = none;
+    match x {
+        some(v) => { return v; }
+        none => { return 0; }
+    }
+}

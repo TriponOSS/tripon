@@ -253,6 +253,7 @@ Compilers are personal only to theirs humans; Tripon's is not.
 | `ralt install <name\|url\|dir>` | resolve/refresh a dependency |
 | `ralt deps` | list collected dep sources |
 | `ralt fmt <file.tp>` | canonical layout — diff-friendly output |
+| `ralt lint <file.tp> [--json]` | tier-ceiling lint: features above the declared tier are E0301 |
 | `ralt doc <file.tp> [--json]` | signatures of every `fn` (text or JSON) |
 | `ralt tokens <file.tp>` | frozen token-stream oracle — pins the self-host lexer byte-for-byte |
 | `ralt lsp` | editor/tooling server over stdio |
@@ -332,7 +333,10 @@ prove them.
       P4.4 slice landed: `tests/native_parity.sh` diffs native vs C on every
       scalar/str/float/trap case (10 parity, aggregates skipped). Next: P4.3
       aggregates (arrays, structs, enums/match, opt/result)
-- [ ] Ideation: package cache with content addressing, tier linter
+- [x] **Tier linter.** `ralt lint` parses and flags features above the
+      declared `use tier` ceiling (E0301); kernel files using str/opt/result/
+      match/? are caught. `tests/lint_smoke.sh`
+- [ ] Ideation: package cache with content addressing
 
 Phase detail lives in [PLAN.md](PLAN.md).
 
