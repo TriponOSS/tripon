@@ -964,9 +964,9 @@ static void emit_gui_runtime(Cg *g) {
     fputs("static GtkWidget *G[GUI_MAX];\n", g->out);
     fputs("static int GTYPE[GUI_MAX]; /* 0=win 1=box 2=entry 3=btn 4=wv */\n", g->out);
     fputs("static int GN=0;\n", g->out);
-    fputs("static void (*GCB[GUI_MAX])(void);\n", g->out);
+    fputs("static void (*GCB[GUI_MAX])(int);\n", g->out);
     fputs("static int GNEW(void){ if(GN>=GUI_MAX) return -1; return GN++; }\n", g->out);
-    fputs("static void GBTN(GtkButton*b,gpointer d){ int id=GPOINTER_TO_INT(d); if(id>=0 && id<GUI_MAX && GCB[id]) GCB[id](); }\n", g->out);
+    fputs("static void GBTN(GtkButton*b,gpointer d){ int id=GPOINTER_TO_INT(d); if(id>=0 && id<GUI_MAX && GCB[id]) GCB[id](id); }\n", g->out);
     fputs("static int32_t tp_builtin_gui_init(void){ gtk_init(NULL,NULL); return 0; }\n", g->out);
     fputs("static int GWINBOX[GUI_MAX];\n", g->out);
     fputs("static int32_t tp_builtin_gui_window_new(const char *title){ int id=GNEW(); if(id<0) return -1; GtkWidget*w=gtk_window_new(GTK_WINDOW_TOPLEVEL); gtk_window_set_title(GTK_WINDOW(w), title?title:\"Crowbar\"); gtk_window_set_default_size(GTK_WINDOW(w), 1000,700); GtkWidget*b=gtk_box_new(GTK_ORIENTATION_VERTICAL,4); gtk_container_add(GTK_CONTAINER(w),b); G[id]=w; GTYPE[id]=0; int bid=GNEW(); G[bid]=b; GTYPE[bid]=1; GWINBOX[id]=bid; gtk_widget_show(b); return id; }\n", g->out);
@@ -978,7 +978,7 @@ static void emit_gui_runtime(Cg *g) {
     fputs("static int tp_builtin_gui_button_new(int32_t parent, const char *label){ int id=GNEW(); if(id<0) return -1; GtkWidget*b=gtk_button_new_with_label(label?label:\"\"); if(parent>=0&&parent<GUI_MAX&&G[parent]) gtk_box_pack_start(GTK_BOX(G[parent]), b, FALSE, FALSE, 0); G[id]=b; GTYPE[id]=3; gtk_widget_show(b); return id; }\n", g->out);
     fputs("static int tp_builtin_webview_new(int32_t parent){ int id=GNEW(); if(id<0) return -1; GtkWidget*w=webkit_web_view_new(); if(parent>=0&&parent<GUI_MAX&&G[parent]) gtk_box_pack_start(GTK_BOX(G[parent]), w, TRUE, TRUE, 0); G[id]=w; GTYPE[id]=4; gtk_widget_show(w); return id; }\n", g->out);
     fputs("static void tp_builtin_webview_load(int32_t wv, const char *url){ if(wv<0||wv>=GUI_MAX||!G[wv]) return; if(!url||!*url) url=\"about:blank\"; webkit_web_view_load_uri(WEBKIT_WEB_VIEW(G[wv]), url); }\n", g->out);
-    fputs("static void tp_builtin_gui_button_onclick(int32_t btn, void (*cb)(void)){ if(btn<0||btn>=GUI_MAX||!G[btn]) return; GCB[btn]=cb; g_signal_connect(G[btn], \"clicked\", G_CALLBACK(GBTN), GINT_TO_POINTER(btn)); }\n", g->out);
+    fputs("static void tp_builtin_gui_button_onclick(int32_t btn, void (*cb)(int)){ if(btn<0||btn>=GUI_MAX||!G[btn]) return; GCB[btn]=cb; g_signal_connect(G[btn], \"clicked\", G_CALLBACK(GBTN), GINT_TO_POINTER(btn)); }\n", g->out);
     fputs("static const char *tp_builtin_gui_entry_text(int32_t e){ if(e<0||e>=GUI_MAX||!G[e]) return \"\"; return gtk_entry_get_text(GTK_ENTRY(G[e])); }\n", g->out);
     fputs("static void tp_builtin_gui_show(int32_t w){ if(w<0||w>=GUI_MAX||!G[w]) return; if(GTYPE[w]==0) gtk_widget_show_all(G[w]); else gtk_widget_show(G[w]); }\n", g->out);
     fputs("static void tp_builtin_gui_hide(int32_t w){ if(w<0||w>=GUI_MAX||!G[w]) return; gtk_widget_hide(G[w]); }\n", g->out);
