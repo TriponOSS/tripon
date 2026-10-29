@@ -252,6 +252,7 @@ Compilers are personal only to theirs humans; Tripon's is not.
 | `ralt init [name]` | scaffold a full project: `ralt.yaml` + `src/main.tp` + `.gitignore` |
 | `ralt install <name\|url\|dir>` | resolve/refresh a dependency |
 | `ralt deps` | list collected dep sources |
+| `ralt lock` | write `ralt.lock`: one content hash per dependency |
 | `ralt fmt <file.tp>` | canonical layout — diff-friendly output |
 | `ralt lint <file.tp> [--json]` | tier-ceiling lint: features above the declared tier are E0301 |
 | `ralt doc <file.tp> [--json]` | signatures of every `fn` (text or JSON) |
@@ -336,7 +337,10 @@ prove them.
 - [x] **Tier linter.** `ralt lint` parses and flags features above the
       declared `use tier` ceiling (E0301); kernel files using str/opt/result/
       match/? are caught. `tests/lint_smoke.sh`
-- [ ] Ideation: package cache with content addressing
+- [x] **Content-addressed lockfile.** `ralt lock` hashes each dep tree
+      (FNV-1a over sorted paths + bytes) into `ralt.lock`; deterministic, and
+      changes when dep content changes
+- [ ] Ideation: package cache keyed by those hashes
 
 Phase detail lives in [PLAN.md](PLAN.md).
 

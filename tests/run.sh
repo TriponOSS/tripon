@@ -133,6 +133,16 @@ else
     fail=$((fail + 1)); failed_names="$failed_names tool/deps"
 fi
 
+# lock: content-addressed dependency lockfile
+if sh tests/lock_smoke.sh > "$OUT/lock.log" 2>&1; then
+    note "ok   tool/lock (content hashes)"
+    pass=$((pass + 1))
+else
+    note "FAIL tool/lock"
+    cat "$OUT/lock.log"
+    fail=$((fail + 1)); failed_names="$failed_names tool/lock"
+fi
+
 # stdlib: Tripon-only smoke (kernel math, core opt/result/str, algorithms,
 # enums, result chains, struct accumulators) via dep folding
 if sh tests/stdlib_smoke.sh > "$OUT/stdlib.log" 2>&1; then
