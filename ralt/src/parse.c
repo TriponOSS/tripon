@@ -787,6 +787,21 @@ Decl **parse_file(Arena *a, Token *toks, int ntoks, const char *file) {
             expect_token(&p, TK_BRACE_R, "'}' to close the extern block");
             continue;
         }
+        if (at(&p, TK_LET) || at(&p, TK_CONST)) {
+            Token *kw = advance(&p);
+            Decl *d = arena_zalloc(a, sizeof(Decl));
+            d->kind = D_LET;
+            d->is_const = (kw->kind == TK_CONST);
+            Token *name = expect_token(&p, TK_IDENT, "a binding name after let/const");
+            d->name = name->text;
+            d->span = kw->span;
+            if (eat(&p, TK_COLON)) d->ty = parse_type(&p, &d->tname);
+            else d->ty = TY_UNSET;
+            if (eat(&p, TK_ASSIGN)) d->init = parse_expr(&p);
+            expect_token(&p, TK_SEMI, "';' to end the declaration");
+            vec_push_ptr((VecPtr *)&out, d);
+            continue;
+        }
         if (at(&p, TK_FN)) {
             FnDecl *fn = parse_fn_proto(&p, false);
             fn->body = NULL;

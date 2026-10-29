@@ -123,6 +123,18 @@ static const Builtin BUILTINS[] = {
     {"print_f64", TY_VOID, 1, {TY_F64, TY_UNSET, TY_UNSET, TY_UNSET}},
     {"print_str", TY_VOID, 1, {TY_STR, TY_UNSET, TY_UNSET, TY_UNSET}},
     {"len",       TY_I32, 1, {TY_STR, TY_UNSET, TY_UNSET, TY_UNSET}},
+    /* GUI builtins (Linux/GTK backend) */
+    {"gui_init",        TY_I32, 0, {TY_UNSET, TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"gui_window_new",  TY_I32, 1, {TY_STR,  TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"gui_run",         TY_VOID, 0, {TY_UNSET, TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"webview_new",     TY_I32, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"webview_load",    TY_VOID, 2, {TY_I32,  TY_STR,  TY_UNSET, TY_UNSET}},
+    {"gui_entry_new",   TY_I32, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"gui_button_new",  TY_I32, 2, {TY_I32,  TY_STR,  TY_UNSET, TY_UNSET}},
+    {"gui_button_onclick", TY_VOID, 2, {TY_I32, TY_FN, TY_UNSET, TY_UNSET}},
+    {"gui_entry_text",  TY_STR, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"gui_widget_show", TY_VOID, 1, {TY_I32,  TY_UNSET, TY_UNSET, TY_UNSET}},
+    {"gui_quit",        TY_VOID, 0, {TY_UNSET, TY_UNSET, TY_UNSET, TY_UNSET}},
 };
 
 static bool builtin_info(const char *name, int *ret, int *argc, Ty *args) {
@@ -616,6 +628,7 @@ static Ty tc_expr(Ctx *c, Expr *e) {
                 for (int i = 0; i < bargc; i++) {
                     Ty at = tc_expr_w(c, e->args[i], barg[i], NULL);
                     if (at == TY_UNSET || barg[i] == TY_UNSET) continue;
+                    if (barg[i] == TY_FN && at == TY_FN) continue; /* any fn arity accepted */
                     if (!ty_same(at, e->args[i]->tname, barg[i], NULL) &&
                         !ty_fence_ok(at, barg[i])) {
                         char msg[240];
@@ -1440,6 +1453,26 @@ void typecheck_file(Arena *a, Decl **decls, int ndecls) {
     prepass_fns(&c, decls, ndecls);
     prepass_types(&c, decls, ndecls);   /* also resolves fn param/return types */
 
+    /* global scope: top-level let/const bindings are visible in every fn */
+    Scope *global_scope = arena_zalloc(c.a, sizeof(Scope));
+    for (int i = 0; i < ndecls; i++) {
+        if (decls[i]->kind != D_LET) continue;
+        Decl *d = decls[i];
+        if (d->ty == TY_TYPEDEF) d->ty = resolve_tname(&c, d->tname, d->span);
+        if (d->ty == TY_UNSET) d->ty = TY_I32;
+        if (d->init) {
+            c.scopes = global_scope;
+            Ty at = tc_expr_w(&c, d->init, d->ty, d->tname);
+            if (at != TY_UNSET && !ty_same(at, d->init->tname, d->ty, d->tname))
+                diag(d->init->span, E0202, SEV_ERROR, "global init type mismatch", "types must match");
+        }
+        Local *na = arena_alloc(c.a, sizeof(Local) * (size_t)(global_scope->nlocals + 1));
+        if (global_scope->nlocals) memcpy(na, global_scope->locals, sizeof(Local) * (size_t)global_scope->nlocals);
+        na[global_scope->nlocals] = (Local){d->name, d->ty, d->tname, d->is_const, d->span};
+        global_scope->locals = na;
+        global_scope->nlocals++;
+    }
+
     bool have_main = false;
     for (int i = 0; i < c.nfuncs; i++)
         if (strcmp(c.funcs[i]->name, "main") == 0 && !c.funcs[i]->is_extern) {
@@ -1454,7 +1487,7 @@ void typecheck_file(Arena *a, Decl **decls, int ndecls) {
                      "i32 becomes the process exit code");
             }
             c.cur_fn = m;
-            c.scopes = NULL;
+            c.scopes = global_scope;
             tc_block(&c, m->body, m->nbody);
             c.cur_fn = NULL;
         }
@@ -1470,8 +1503,10 @@ void typecheck_file(Arena *a, Decl **decls, int ndecls) {
         if (strcmp(c.funcs[i]->name, "main") == 0 || c.funcs[i]->is_extern) continue;
         FnDecl *fn = c.funcs[i];
         c.cur_fn = fn;
-        c.scopes = NULL;
-        c.scopes = arena_zalloc(c.a, sizeof(Scope));
+        c.scopes = global_scope;
+        Scope *_fnsc = arena_zalloc(c.a, sizeof(Scope));
+        _fnsc->parent = global_scope;
+        c.scopes = _fnsc;
         for (int k = 0; k < fn->nparams; k++) {
             scope_insert(&c, fn->params[k].name, fn->params[k].ty, fn->params[k].tname,
                          false, fn->params[k].span);

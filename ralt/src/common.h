@@ -315,14 +315,18 @@ struct FnDecl {
     Span span;
 };
 
-typedef enum { D_FN, D_TIER, D_USE, D_STRUCT, D_ENUM } DeclKind;
+typedef enum { D_FN, D_TIER, D_USE, D_STRUCT, D_ENUM, D_LET } DeclKind;
 
 struct Decl {
     DeclKind kind;
     FnDecl *fn;
     StDecl *st;
     EnDecl *en;
-    const char *name;   /* tier name */
+    const char *name;   /* tier name / global name */
+    bool is_const;
+    Ty ty;
+    const char *tname;
+    Expr *init;
     Span span;
 };
 

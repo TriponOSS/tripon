@@ -308,6 +308,11 @@ void parse_tree_dump(FILE *o, Decl **decls, int ndecls) {
                 }
             }
             break;
+        case D_LET:
+            put_word(o, dl->is_const ? "CONST " : "LET ");
+            put_word(o, dl->name);
+            fputc('\n', o);
+            break;
         }
     }
 }

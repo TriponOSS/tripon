@@ -409,7 +409,10 @@ static void emit_bin(Cg *g, Expr *e) {
 }
 
 static bool is_builtin(const char *name) {
-    static const char *B[] = {"print_i32", "print_i64", "print_f64", "print_str", "len"};
+    static const char *B[] = {"print_i32", "print_i64", "print_f64", "print_str", "len",
+        "gui_init", "gui_window_new", "gui_run", "webview_new", "webview_load",
+        "gui_entry_new", "gui_button_new", "gui_button_onclick", "gui_entry_text",
+        "gui_widget_show", "gui_quit"};
     for (size_t i = 0; i < sizeof B / sizeof B[0]; i++)
         if (strcmp(B[i], name) == 0) return true;
     return false;
@@ -912,6 +915,126 @@ static void emit_fn(Cg *g, FnDecl *fn) {
     fputs("}\n", g->out);
 }
 
+static bool expr_uses_gui(Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_CALL && e->callee &&
+        (strncmp(e->callee, "gui_", 4) == 0 || strncmp(e->callee, "webview_", 8) == 0))
+        return true;
+    if (expr_uses_gui(e->lhs)) return true;
+    if (expr_uses_gui(e->rhs)) return true;
+    if (expr_uses_gui(e->operand)) return true;
+    if (expr_uses_gui(e->base)) return true;
+    if (expr_uses_gui(e->index)) return true;
+    for (int i = 0; i < e->nargs; i++) if (expr_uses_gui(e->args[i])) return true;
+    return false;
+}
+static bool stmt_uses_gui(Stmt *s) {
+    if (!s) return false;
+    if (expr_uses_gui(s->cond)) return true;
+    if (expr_uses_gui(s->init)) return true;
+    if (expr_uses_gui(s->value)) return true;
+    if (expr_uses_gui(s->target)) return true;
+    for (int i = 0; i < s->nbody; i++) if (stmt_uses_gui(s->body[i])) return true;
+    if (s->els) {
+        if (s->els->kind == ST_IF) { if (stmt_uses_gui(s->els)) return true; }
+        else { for (int i = 0; i < s->els->nbody; i++) if (stmt_uses_gui(s->els->body[i])) return true; }
+    }
+    for (int i = 0; i < s->narms; i++) {
+        MatchArm *a = s->arms[i];
+        for (int j = 0; j < a->nbody; j++) if (stmt_uses_gui(a->body[j])) return true;
+    }
+    return false;
+}
+static bool program_uses_gui(Decl **decls, int ndecls) {
+    for (int i = 0; i < ndecls; i++) {
+        if (decls[i]->kind == D_FN && decls[i]->fn && !decls[i]->fn->is_extern) {
+            for (int j = 0; j < decls[i]->fn->nbody; j++)
+                if (stmt_uses_gui(decls[i]->fn->body[j])) return true;
+        }
+    }
+    return false;
+}
+
+static void emit_gui_runtime(Cg *g) {
+#ifdef __linux__
+    fputs("#include <gtk/gtk.h>\n#include <webkit2/webkit2.h>\n", g->out);
+    fputs("\n/* ---- GUI runtime (GTK3 + WebKit2GTK) ---- */\n", g->out);
+    fputs("#define GUI_MAX 64\n", g->out);
+    fputs("static GtkWidget *g_gui_win[GUI_MAX];\n", g->out);
+    fputs("static GtkWidget *g_gui_box[GUI_MAX];\n", g->out);
+    fputs("static GtkWidget *g_gui_entry[GUI_MAX];\n", g->out);
+    fputs("static GtkWidget *g_gui_btn[GUI_MAX];\n", g->out);
+    fputs("static GtkWidget *g_gui_wv[GUI_MAX];\n", g->out);
+    fputs("static void (*g_gui_cb[GUI_MAX])(void);\n", g->out);
+    fputs("static int g_gui_nwin=0, g_gui_nbox=0, g_gui_nentry=0, g_gui_nbtn=0, g_gui_nwv=0;\n", g->out);
+    fputs("static int gui_alloc(int *c){ if(*c>=GUI_MAX) return -1; return (*c)++; }\n", g->out);
+    fputs("static void gui_btn_clicked(GtkButton *b, gpointer d){ int id=GPOINTER_TO_INT(d); if(id>=0 && id<GUI_MAX && g_gui_cb[id]) g_gui_cb[id](); }\n", g->out);
+    /* gui_init */
+    fputs("static int32_t tp_builtin_gui_init(void){ gtk_init(NULL,NULL); return 0; }\n", g->out);
+    /* gui_window_new */
+    fputs("static int32_t tp_builtin_gui_window_new(const char *title){\n", g->out);
+    fputs("  int id=g_gui_nwin++; if(id>=GUI_MAX) return -1;\n", g->out);
+    fputs("  GtkWidget *w=gtk_window_new(GTK_WINDOW_TOPLEVEL);\n", g->out);
+    fputs("  gtk_window_set_title(GTK_WINDOW(w), title?title:\"Crowbar\");\n", g->out);
+    fputs("  gtk_window_set_default_size(GTK_WINDOW(w), 1000, 700);\n", g->out);
+    fputs("  GtkWidget *b=gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);\n", g->out);
+    fputs("  gtk_container_add(GTK_CONTAINER(w), b);\n", g->out);
+    fputs("  g_gui_win[id]=w; g_gui_box[id]=b;\n", g->out);
+    fputs("  return id;\n}\n", g->out);
+    /* gui_run */
+    fputs("static void tp_builtin_gui_run(void){ gtk_main(); }\n", g->out);
+    /* gui_quit */
+    fputs("static void tp_builtin_gui_quit(void){ gtk_main_quit(); }\n", g->out);
+    /* webview_new */
+    fputs("static int32_t tp_builtin_webview_new(int32_t win){\n", g->out);
+    fputs("  if(win<0||win>=GUI_MAX||!g_gui_box[win]) return -1;\n", g->out);
+    fputs("  int id=g_gui_nwv++; if(id>=GUI_MAX) return -1;\n", g->out);
+    fputs("  GtkWidget *wv=webkit_web_view_new();\n", g->out);
+    fputs("  gtk_box_pack_start(GTK_BOX(g_gui_box[win]), wv, TRUE, TRUE, 0);\n", g->out);
+    fputs("  gtk_widget_show(wv);\n", g->out);
+    fputs("  g_gui_wv[id]=wv;\n", g->out);
+    fputs("  return id;\n}\n", g->out);
+    /* webview_load */
+    fputs("static void tp_builtin_webview_load(int32_t wv, const char *url){\n", g->out);
+    fputs("  if(wv<0||wv>=GUI_MAX||!g_gui_wv[wv]) return;\n", g->out);
+    fputs("  if(!url||!*url) url=\"about:blank\";\n", g->out);
+    fputs("  webkit_web_view_load_uri(WEBKIT_WEB_VIEW(g_gui_wv[wv]), url);\n", g->out);
+    fputs("}\n", g->out);
+    /* gui_entry_new */
+    fputs("static int32_t tp_builtin_gui_entry_new(int32_t parent){\n", g->out);
+    fputs("  int id=g_gui_nentry++; if(id>=GUI_MAX) return -1;\n", g->out);
+    fputs("  GtkWidget *e=gtk_entry_new();\n", g->out);
+    fputs("  if(parent>=0 && parent<GUI_MAX && g_gui_box[parent]) gtk_box_pack_start(GTK_BOX(g_gui_box[parent]), e, FALSE, FALSE, 0);\n", g->out);
+    fputs("  gtk_widget_show(e);\n", g->out);
+    fputs("  g_gui_entry[id]=e;\n", g->out);
+    fputs("  return id;\n}\n", g->out);
+    /* gui_button_new */
+    fputs("static int32_t tp_builtin_gui_button_new(int32_t parent, const char *label){\n", g->out);
+    fputs("  int id=g_gui_nbtn++; if(id>=GUI_MAX) return -1;\n", g->out);
+    fputs("  GtkWidget *b=gtk_button_new_with_label(label?label:\"\");\n", g->out);
+    fputs("  if(parent>=0 && parent<GUI_MAX && g_gui_box[parent]) gtk_box_pack_start(GTK_BOX(g_gui_box[parent]), b, FALSE, FALSE, 0);\n", g->out);
+    fputs("  gtk_widget_show(b);\n", g->out);
+    fputs("  g_gui_btn[id]=b;\n", g->out);
+    fputs("  return id;\n}\n", g->out);
+    /* gui_button_onclick */
+    fputs("static void tp_builtin_gui_button_onclick(int32_t btn, void (*cb)(void)){\n", g->out);
+    fputs("  if(btn<0||btn>=GUI_MAX||!g_gui_btn[btn]) return;\n", g->out);
+    fputs("  g_gui_cb[btn]=cb;\n", g->out);
+    fputs("  g_signal_connect(g_gui_btn[btn], \"clicked\", G_CALLBACK(gui_btn_clicked), GINT_TO_POINTER(btn));\n", g->out);
+    fputs("}\n", g->out);
+    /* gui_entry_text */
+    fputs("static const char *tp_builtin_gui_entry_text(int32_t e){\n", g->out);
+    fputs("  if(e<0||e>=GUI_MAX||!g_gui_entry[e]) return \"\";\n", g->out);
+    fputs("  return gtk_entry_get_text(GTK_ENTRY(g_gui_entry[e]));\n", g->out);
+    fputs("}\n", g->out);
+    /* gui_widget_show */
+    fputs("static void tp_builtin_gui_widget_show(int32_t w){\n", g->out);
+    fputs("  /* show the top-level window when given a window handle */\n", g->out);
+    fputs("  if(w>=0 && w<GUI_MAX && g_gui_win[w]) gtk_widget_show_all(g_gui_win[w]);\n", g->out);
+    fputs("}\n", g->out);
+#endif
+}
+
 void codegen_file(Arena *a, Decl **decls, int ndecls, const char *outpath, bool fast) {
     FILE *out = fopen(outpath, "w");
     if (!out) {
@@ -935,6 +1058,32 @@ void codegen_file(Arena *a, Decl **decls, int ndecls, const char *outpath, bool 
 
     emit_prologue(&g);
     emit_typedefs(&g);
+    if (program_uses_gui(decls, ndecls)) emit_gui_runtime(&g);
+    fputs("\n/* ---- globals ---- */\n", out);
+    for (int i = 0; i < ndecls; i++) {
+        if (decls[i]->kind != D_LET) continue;
+        Decl *d = decls[i];
+        /* emit as file-scope static */
+        const char *ty = tp_type_name(&g, d->ty, d->tname);
+        if (d->ty == TY_ARRAY) {
+            emit_decl_name(&g, d->ty, d->tname, cg_ident(&g, d->name));
+            fputs(";\n", out);
+        } else {
+            fprintf(out, "static %s %s", ty, cg_ident(&g, d->name));
+            if (d->init) {
+                /* only constant init supported; for non-const, zero-init */
+                /* emit initializer if simple; else 0 */
+                fputs(" = 0;\n", out);
+            } else {
+                /* default zero */
+                if (d->ty == TY_STR) fputs(" = \"\";\n", out);
+                else if (d->ty == TY_F32) fputs(" = 0.0f;\n", out);
+                else if (d->ty == TY_F64) fputs(" = 0.0;\n", out);
+                else if (d->ty == TY_BOOL) fputs(" = false;\n", out);
+                else fputs(" = 0;\n", out);
+            }
+        }
+    }
     fputs("\n/* ---- function-pointer types ---- */\n", out);
     for (int i = 0; i < fn_type_count(); i++) {
         FnTypeInfo *fi = fn_type_at(i);
