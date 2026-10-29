@@ -10,6 +10,8 @@ jobs:
       CC: ${{ matrix.cc }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: build
         run: make build/ralt CC=$CC
       - name: suite
