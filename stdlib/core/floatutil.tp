@@ -1,0 +1,46 @@
+// stdlib/core/floatutil.tp - float math helpers via Newton iteration (tier core).
+// No pow/fmod builtins; iteration + builtins only.
+
+use tier core;
+
+fn sqrt_newton(x: f64) -> f64 {
+    if x <= 0.0 { return 0.0; }
+    let g = x;
+    let i = 0;
+    while i < 20 {
+        g = (g + x / g) / 2.0;
+        i += 1;
+    }
+    return g;
+}
+
+fn abs_f64(x: f64) -> f64 {
+    if x < 0.0 { return 0.0 - x; }
+    return x;
+}
+
+fn clamp_f64(x: f64, lo: f64, hi: f64) -> f64 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+fn min_f64(a: f64, b: f64) -> f64 {
+    if a < b { return a; }
+    return b;
+}
+
+fn max_f64(a: f64, b: f64) -> f64 {
+    if a > b { return a; }
+    return b;
+}
+
+fn powi_f64(base: f64, n: i32) -> f64 {
+    let r = 1.0;
+    let i = 0;
+    while i < n {
+        r = r * base;
+        i += 1;
+    }
+    return r;
+}

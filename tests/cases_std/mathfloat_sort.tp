@@ -1,0 +1,17 @@
+// sort + float stdlib smoke via dep folding.
+use tier core;
+
+fn main() -> i32 {
+    print_i32(sort3_min(5, 2, 8));
+    print_i32(sort3_max(5, 2, 8));
+    print_i32(sort3_mid(5, 2, 8));
+    if is_sorted3(1, 2, 3) { print_str("sorted yes"); } else { print_str("sorted no"); }
+    if is_sorted3(3, 1, 2) { print_str("bad"); } else { print_str("unsorted ok"); }
+    print_f64(sqrt_newton(144.0));
+    print_f64(abs_f64(0.0 - 2.5));
+    print_f64(clamp_f64(99.0, 0.0, 1.0));
+    print_f64(min_f64(1.5, 2.5));
+    print_f64(max_f64(1.5, 2.5));
+    print_f64(powi_f64(2.0, 10));
+    return 0;
+}

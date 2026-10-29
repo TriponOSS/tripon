@@ -1,0 +1,36 @@
+// stdlib/core/sortutil.tp - small fixed-array sorting helpers (tier core).
+// v0: arrays are local-only, so these are patterns callers inline;
+// helpers here cover min/max/sorted-check over scalars.
+
+use tier core;
+
+fn sort3_min(a: i32, b: i32, c: i32) -> i32 {
+    let m = a;
+    if b < m { m = b; }
+    if c < m { m = c; }
+    return m;
+}
+
+fn sort3_max(a: i32, b: i32, c: i32) -> i32 {
+    let m = a;
+    if b > m { m = b; }
+    if c > m { m = c; }
+    return m;
+}
+
+fn sort3_mid(a: i32, b: i32, c: i32) -> i32 {
+    if a > b {
+        if b > c { return b; }
+        if a > c { return c; }
+        return a;
+    }
+    if a > c { return a; }
+    if b > c { return c; }
+    return b;
+}
+
+fn is_sorted3(a: i32, b: i32, c: i32) -> bool {
+    if a > b { return false; }
+    if b > c { return false; }
+    return true;
+}
