@@ -332,8 +332,11 @@ prove them.
       floats (P4.2) are at byte-parity with the C backend, incl. all no-UB traps
       E9001-E9004 and `-fast` semantics; shared TAC + linear-scan allocation.
       P4.4 slice landed: `tests/native_parity.sh` diffs native vs C on every
-      scalar/str/float/trap case (10 parity, aggregates skipped). Next: P4.3
-      aggregates (arrays, structs, enums/match, opt/result)
+      scalar/str/float/trap case. P4.3 started: local fixed arrays (index,
+      store, compound, whole-array copy, len) with E9002 bounds traps; float
+      equality and the `ucomis` mnemonic fixed, so float cases are at parity
+      too (16 parity, 5 aggregate skips). Next: structs, enums/match,
+      opt/result
 - [x] **Tier linter.** `ralt lint` parses and flags features above the
       declared `use tier` ceiling (E0301); kernel files using str/opt/result/
       match/? are caught. `tests/lint_smoke.sh`
