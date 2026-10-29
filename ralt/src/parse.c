@@ -85,6 +85,24 @@ static Ty parse_type(Parser *p, const char **tname) {
     if (eat(p, TK_LP) && eat(p, TK_RP)) {
         return TY_VOID;     /* "()" = unit/void */
     }
+    /* fn types are not a v0 feature (closures land with the std tier). Reject
+     * them cleanly instead of crashing on a NULL token text. */
+    if (at(p, TK_FN)) {
+        Token *fk = advance(p);
+        if (at(p, TK_LP)) {
+            int depth = 0;
+            while (!at(p, TK_EOF)) {
+                if (at(p, TK_LP)) { depth++; advance(p); }
+                else if (at(p, TK_RP)) { advance(p); if (--depth <= 0) break; }
+                else advance(p);
+            }
+        }
+        if (at(p, TK_ARROW)) { advance(p); (void)parse_type(p, NULL); }
+        diag(fk->span, E0101, SEV_ERROR,
+             "function types are not available in v0 (closures arrive with the std tier)",
+             "pass functions by name to extern APIs, or raise the tier target");
+        return TY_UNSET;
+    }
     Token *t = expect_token(p, TK_IDENT, "a type name");
     static const struct { const char *n; Ty ty; } TYPES[] = {
         {"i8", TY_I8}, {"i16", TY_I16}, {"i32", TY_I32}, {"i64", TY_I64},
