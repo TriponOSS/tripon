@@ -145,6 +145,18 @@ else
     fail=$((fail + 1)); failed_names="$failed_names stdlib"
 fi
 
+# native: P4.4 slice — x86-64 backend must match the C backend on the cases
+# it supports today (scalars, str, floats, traps); aggregates are skipped
+if sh tests/native_parity.sh > "$OUT/native.log" 2>&1; then
+    nat=$(grep -c '^  ok' "$OUT/native.log")
+    note "ok   native parity ($nat cases)"
+    pass=$((pass + 1))
+else
+    note "FAIL native parity"
+    cat "$OUT/native.log"
+    fail=$((fail + 1)); failed_names="$failed_names native"
+fi
+
 # selfhost: Tripon lexer port must replay the bootstrap C lexer token-for-token
 if sh tests/selfhost.sh > "$OUT/selfhost.log" 2>&1; then
     note "ok   selfhost (P3.0 lexer oracle)"

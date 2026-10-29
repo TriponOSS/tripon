@@ -56,7 +56,7 @@ Real constraints produce real languages:
    syntax. One grammar file with no macros, no overloading, no feature soup.
 
 Tripon is compiled to C99 by default; since P4.1 the toolchain also emits
-native x86-64 assembly directly (`--backend cc` loops a cc pass, no C step) -
+native x86-64 assembly directly (`--backend native` loops a cc pass, no C step) -
 same programs, same traps, byte-parity output. Any C toolchain can consume
 the portable path, including tiny compilers like tcc.
 
@@ -79,7 +79,7 @@ Run programs:
 ./build/ralt run tests/cases/hello.tp
 ./build/ralt check tests/cases/arith.tp --json   # the full diagnostic contract
 ralt init my-app                            # scaffold ralt.yaml + src/main.tp
-./build/ralt run my-app/src/main.tp --backend cc   # native x86-64 path
+./build/ralt run my-app/src/main.tp --backend native   # native x86-64 path
 ```
 
 ---
@@ -244,7 +244,7 @@ Compilers are personal only to theirs humans; Tripon's is not.
 
 | command | what it does |
 |---|---|
-| `ralt build <file.tp>` [-o out] [-O fast] [-fast] | emit C99 → cc pipeline → executable (or `-O fast` optim passes); `--backend cc` emits x86-64 asm directly |
+| `ralt build <file.tp>` [-o out] [-O fast] [-fast] | emit C99 → cc pipeline → executable (or `-O fast` optim passes); `--backend native` emits x86-64 asm directly |
 | `ralt run <file.tp> [args...]` | build + execute in one ms |
 | `ralt check <file.tp> [--json]` | full typecheck, human or machine format |
 | `ralt emit --c <file.tp>` | stop after codegen, emit the .c |
@@ -325,12 +325,13 @@ prove them.
       48/48 incl. the port itself; frozen oracle tests in tests/selfhost.sh).
       Next: typechecker port (check --json oracle), then flag day — "Tripon
       made with Tripon" compiles itself and passes the suite
-- [~] **P4 — Native x86-64 backend.** `run` with `--backend cc` (or env
-      `TP_BACKEND=cc`) loops assembles the .s directly via cc, no C emitted -
-      scalars (P4.1) and floats (P4.2) are at byte-parity with the C backend,
-      incl. all no-UB traps E9001-E9004 and `-fast` semantics; P4.1 shared TAC
-      + linear-scan allocation. Next: P4.3 aggregates (arrays, structs,
-      enums/match, opt/result), P4.4 native test slice
+- [~] **P4 — Native x86-64 backend.** `run` with `--backend native` assembles
+      the .s directly via `as`, cc only links - no C emitted. Scalars (P4.1) and
+      floats (P4.2) are at byte-parity with the C backend, incl. all no-UB traps
+      E9001-E9004 and `-fast` semantics; shared TAC + linear-scan allocation.
+      P4.4 slice landed: `tests/native_parity.sh` diffs native vs C on every
+      scalar/str/float/trap case (10 parity, aggregates skipped). Next: P4.3
+      aggregates (arrays, structs, enums/match, opt/result)
 - [ ] Ideation: package cache with content addressing, tier linter
 
 Phase detail lives in [PLAN.md](PLAN.md).
