@@ -335,8 +335,10 @@ prove them.
       scalar/str/float/trap case. P4.3 started: local fixed arrays (index,
       store, compound, whole-array copy, len) with E9002 bounds traps; float
       equality and the `ucomis` mnemonic fixed, so float cases are at parity
-      too (16 parity, 5 aggregate skips). Next: structs, enums/match,
-      opt/result
+      too. Structs landed: field layout, construction, nested field access and
+      assignment, by-value copy, plus an internal struct-param/return ABI
+      (pointer-passed params, hidden return pointer) — 17 parity, 4 aggregate
+      skips. Next: arrays-of-structs, enums/match, opt/result
 - [x] **Tier linter.** `ralt lint` parses and flags features above the
       declared `use tier` ceiling (E0301); kernel files using str/opt/result/
       match/? are caught. `tests/lint_smoke.sh`
